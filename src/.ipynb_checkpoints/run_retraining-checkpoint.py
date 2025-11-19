@@ -49,27 +49,16 @@ def main():
         
         print(f"📊 Dataset actualizado: {updated_data.shape}")
         
-        # CORRECCIÓN: Usar train_models_from_dataframe en lugar de train_models
-        results = trainer.train_models_from_dataframe(updated_data)  # ¡ESTA ES LA CORRECCIÓN!
+        # Reentrenar modelos
+        results = trainer.train_models(updated_data)
         
         if results:
             print("✅ Modelos reentrenados exitosamente")
             
             # Mostrar comparación de métricas
             print("\n📈 COMPARACIÓN DE MÉTRICAS:")
-            for model_name, metrics in trainer.metrics.items():
-                print(f"   {model_name.upper():<20} - MAE: {metrics['mae']:.2f}, RMSE: {metrics['rmse']:.2f}, R²: {metrics['r2']:.3f}")
-            
-            # Guardar los modelos actualizados
-            trainer.save_models()
-            
-            # Mostrar mejora si es posible
-            print("\n📊 RESUMEN DEL REENTRENAMIENTO:")
-            print(f"   📈 Datos: {len(updated_data)} filas")
-            if trainer.metrics:
-                best_model_name = min(trainer.metrics.items(), key=lambda x: x[1]['mae'])[0]
-                print(f"   🏆 Mejor modelo: {best_model_name}")
-                print(f"   🎯 Mejor R²: {trainer.metrics[best_model_name]['r2']:.3f}")
+            for model_name, metrics in results.items():
+                print(f"   {model_name:20} - MAE: {metrics['mae']:.2f}, RMSE: {metrics['rmse']:.2f}, R²: {metrics['r2']:.3f}")
         
         else:
             print("❌ Error en el reentrenamiento")

@@ -56,24 +56,30 @@ class DataUpdater:
                 cat_data = existing_data[existing_data['product_category_name'] == category]
                 
                 if len(cat_data) > 0:
-                    # Tomar la última observación y modificar ligeramente
-                    last_row = cat_data.iloc[-1].copy()
+                    # Tomar la última observación como DataFrame (no Series)
+                    last_row = cat_data.tail(1).copy()
                     
                     # Actualizar mes
                     last_row['order_month'] = month
                     last_row['date'] = month + '-01'
                     
                     # Simular variaciones (ruido gaussiano)
-                    numeric_cols = last_row.select_dtypes(include=[np.number]).index
+                    # CORRECCIÓN: Usar last_row como DataFrame, no como Series
+                    numeric_cols = last_row.select_dtypes(include=[np.number]).columns
+                    
                     for col in numeric_cols:
                         if col != 'demand_next_month':  # No modificar target
-                            if last_row[col] > 0:  # Solo modificar valores positivos
+                            if last_row[col].iloc[0] > 0:  # Solo modificar valores positivos
                                 variation = np.random.normal(1.0, 0.1)  # ±10% variación
-                                last_row[col] = max(0, last_row[col] * variation)
+                                new_value = max(0, last_row[col].iloc[0] * variation)
+                                last_row[col] = new_value
                     
                     simulated_data.append(last_row)
         
-        return pd.DataFrame(simulated_data)
+        if simulated_data:
+            return pd.concat(simulated_data, ignore_index=True)
+        else:
+            return pd.DataFrame()
     
     def update_dataset(self, new_data):
         """Actualiza el dataset con nuevos datos"""
@@ -82,7 +88,7 @@ class DataUpdater:
         # Cargar datos existentes
         existing_data = self.load_existing_data()
         
-        if existing_data is not None:
+        if existing_data is not None and not new_data.empty:
             # Combinar datos existentes con nuevos
             updated_data = pd.concat([existing_data, new_data], ignore_index=True)
             
@@ -95,7 +101,8 @@ class DataUpdater:
             print(f"✅ Dataset actualizado: {existing_data.shape} → {updated_data.shape}")
             return updated_data
         else:
-            return new_data
+            print("❌ No hay datos nuevos para actualizar")
+            return existing_data
     
     def recalculate_temporal_features(self, df):
         """Recalcula features temporales después de añadir nuevos datos"""
@@ -127,6 +134,9 @@ if __name__ == "__main__":
     updater = DataUpdater()
     new_data = updater.simulate_new_monthly_data(months_to_add=1)
     
-    if new_data is not None:
+    if new_data is not None and not new_data.empty:
         updated_data = updater.update_dataset(new_data)
         updater.save_updated_data(updated_data)
+        print(f"🎉 Simulación completada. Nuevo dataset: {updated_data.shape}")
+    else:
+        print("❌ No se pudieron generar datos nuevos")
