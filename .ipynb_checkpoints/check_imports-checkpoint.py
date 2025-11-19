@@ -44,7 +44,3 @@ if not all_errors:
     print("\n🎉 Todos los imports están correctos!")
 else:
     print(f"\n🔧 Se encontraron {len(all_errors)} imports relativos que necesitan corrección")
-
-
-
-    

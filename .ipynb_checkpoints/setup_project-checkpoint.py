@@ -2,7 +2,7 @@
 import os
 
 def create_project_structure():
-   
+    """Crea la estructura completa del proyecto"""
     
     base_dir = "olist-demand-forecasting"
     directories = [
