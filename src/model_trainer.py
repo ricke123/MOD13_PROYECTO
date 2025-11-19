@@ -6,11 +6,20 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error
-import xgboost as xgb
 from datetime import datetime
 from config import Config
+
+# Intentar importar xgboost, si no está disponible usar alternativa
+try:
+    import xgboost as xgb
+    XGB_AVAILABLE = True
+    print("✅ XGBoost disponible")
+except ImportError:
+    XGB_AVAILABLE = False
+    print("⚠️ XGBoost no disponible, usando alternativas")
 
 class ModelTrainer:
     def __init__(self):
@@ -22,7 +31,7 @@ class ModelTrainer:
         try:
             file_path = Config.get_output_path('TABLA_FINAL_MODULAR.csv')
             df = pd.read_csv(file_path)
-            print(f"📊 Datos cargados: {df.shape}")
+            print(f"📊 Datos de entrenamiento cargados: {df.shape}")
             return df
         except Exception as e:
             print(f"❌ Error cargando datos: {e}")
@@ -49,27 +58,38 @@ class ModelTrainer:
         X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
         y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
         
-        # 1. Random Forest
+        print(f"📈 Split: Train {X_train.shape}, Test {X_test.shape}")
+        
+        # 1. Random Forest (siempre disponible)
         print("🌲 Entrenando Random Forest...")
         rf_model = RandomForestRegressor(
-            n_estimators=100,
-            max_depth=15,
+            n_estimators=50,  # Reducido para pruebas rápidas
+            max_depth=10,
             random_state=42,
             n_jobs=-1
         )
         rf_model.fit(X_train, y_train)
         self.models['random_forest'] = rf_model
         
-        # 2. XGBoost
-        print("🚀 Entrenando XGBoost...")
-        xgb_model = xgb.XGBRegressor(
-            n_estimators=100,
-            max_depth=10,
-            learning_rate=0.1,
-            random_state=42
-        )
-        xgb_model.fit(X_train, y_train)
-        self.models['xgboost'] = xgb_model
+        # 2. Linear Regression (alternativa simple)
+        print("📐 Entrenando Linear Regression...")
+        lr_model = LinearRegression()
+        lr_model.fit(X_train, y_train)
+        self.models['linear_regression'] = lr_model
+        
+        # 3. XGBoost solo si está disponible
+        if XGB_AVAILABLE:
+            print("🚀 Entrenando XGBoost...")
+            xgb_model = xgb.XGBRegressor(
+                n_estimators=50,
+                max_depth=8,
+                learning_rate=0.1,
+                random_state=42
+            )
+            xgb_model.fit(X_train, y_train)
+            self.models['xgboost'] = xgb_model
+        else:
+            print("⏭️  Saltando XGBoost (no disponible)")
         
         # Evaluación
         self.evaluate_models(X_test, y_test)
@@ -85,14 +105,15 @@ class ModelTrainer:
             
             mae = mean_absolute_error(y_test, y_pred)
             rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+            r2 = model.score(X_test, y_test)
             
             self.metrics[name] = {
                 'MAE': mae,
                 'RMSE': rmse,
-                'r2_score': model.score(X_test, y_test)
+                'r2_score': r2
             }
             
-            print(f"   {name.upper():<15} - MAE: {mae:.2f}, RMSE: {rmse:.2f}")
+            print(f"   {name.upper():<20} - MAE: {mae:.2f}, RMSE: {rmse:.2f}, R²: {r2:.3f}")
     
     def save_models(self):
         """Guarda los modelos entrenados"""
@@ -104,21 +125,15 @@ class ModelTrainer:
             # Guardar modelo
             model_path = Config.get_output_path(f'model_{name}_{timestamp}.pkl')
             joblib.dump(model, model_path)
-            
-            # Guardar métricas
-            metrics_path = Config.get_output_path(f'metrics_{name}_{timestamp}.json')
-            import json
-            with open(metrics_path, 'w') as f:
-                json.dump(self.metrics.get(name, {}), f, indent=2)
-            
             print(f"   ✅ {name} guardado en: {model_path}")
         
-        # Guardar el modelo más reciente como "latest"
-        best_model_name = min(self.metrics.items(), key=lambda x: x[1]['MAE'])[0]
-        best_model = self.models[best_model_name]
-        latest_path = Config.get_output_path('model_latest.pkl')
-        joblib.dump(best_model, latest_path)
-        print(f"   🏆 Mejor modelo ({best_model_name}) guardado como: {latest_path}")
+        # Guardar el mejor modelo como "latest"
+        if self.metrics:
+            best_model_name = min(self.metrics.items(), key=lambda x: x[1]['MAE'])[0]
+            best_model = self.models[best_model_name]
+            latest_path = Config.get_output_path('model_latest.pkl')
+            joblib.dump(best_model, latest_path)
+            print(f"   🏆 Mejor modelo ({best_model_name}) guardado como: {latest_path}")
     
     def full_training_pipeline(self):
         """Pipeline completo de entrenamiento"""
@@ -128,21 +143,22 @@ class ModelTrainer:
         # Cargar datos
         df = self.load_training_data()
         if df is None:
+            print("❌ No se pudieron cargar datos para entrenamiento")
             return None
         
         # Preparar features
         X, y = self.prepare_features(df)
         
         # Entrenar modelos
-        self.train_models(X, y)
+        models = self.train_models(X, y)
         
         # Guardar modelos
         self.save_models()
         
         print("🎉 ENTRENAMIENTO COMPLETADO!")
-        return self.models
+        return models
 
-# Uso rápido
+# Prueba rápida
 if __name__ == "__main__":
     trainer = ModelTrainer()
     trainer.full_training_pipeline()
