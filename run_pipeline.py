@@ -20,11 +20,11 @@ def main():
             print("\nPipeline ejecutado exitosamente!")
             print(f"📊 Dataset final: {result.shape}")
         else:
-            print("\n❌ Pipeline no pudo completarse")
+            print("\n Pipeline no pudo completarse")
         return result
         
     except Exception as e:
-        print(f"\n❌ Error en el pipeline: {e}")
+        print(f"\n Error en el pipeline: {e}")
         import traceback
         traceback.print_exc()
         return None
