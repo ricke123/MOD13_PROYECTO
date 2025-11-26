@@ -1,7 +1,6 @@
-# src/config.py
+# src/config.py 
 import os
 from pathlib import Path
-
 
 
 class Config:
@@ -34,11 +33,16 @@ class Config:
         'ema_alphas': [0.3, 0.5, 0.7]
     }
     
-    # Columnas relevantes
+    # Columnas relevantes de ORDERS (ajustadas como en el cuaderno)
     ORDERS_COLUMNS = [
-        'order_id', 'customer_id', 'order_purchase_timestamp',
-        'order_delivered_carrier_date', 'order_delivered_customer_date',
-        'order_estimated_delivery_date', 'order_status'
+        'order_id',
+        'customer_id',
+        'order_purchase_timestamp',
+        'order_approved_at',              # 🔹 añadida
+        'order_delivered_carrier_date',
+        'order_delivered_customer_date',
+        'order_estimated_delivery_date',
+        'order_status'
     ]
     
     # Configuración de modelos

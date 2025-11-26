@@ -2,7 +2,6 @@
 import pandas as pd
 import numpy as np
 
-# Cambiar import relativo
 from config import Config
 
 
@@ -18,6 +17,12 @@ class FeatureEngineer:
         print("🔧 Creando features base...")
         
         orders = self.data['orders_clean'].copy()
+        
+        # Aseguramos que la fecha sea datetime
+        if not np.issubdtype(orders['order_purchase_timestamp'].dtype, np.datetime64):
+            orders['order_purchase_timestamp'] = pd.to_datetime(
+                orders['order_purchase_timestamp'], errors='coerce'
+            )
         
         # Features temporales básicas
         orders['order_month'] = orders['order_purchase_timestamp'].dt.to_period('M').astype(str)
@@ -61,7 +66,8 @@ class FeatureEngineer:
             payment_type_pivot.columns = [f'pct_{col}' for col in payment_type_pivot.columns]
             payment_type_pivot = payment_type_pivot.reset_index()
             payments_final = payments_agg.merge(payment_type_pivot, on='order_id', how='left')
-        except:
+        except Exception as e:
+            print(f"   ⚠️ No se pudieron calcular porcentajes por tipo de pago: {e}")
             payments_final = payments_agg.copy()
             for pt in ['credit_card', 'boleto', 'voucher', 'debit_card']:
                 payments_final[f'pct_{pt}'] = 0.0
@@ -81,12 +87,19 @@ class FeatureEngineer:
         
         # Distribución de scores
         for score in [1, 2, 3, 4, 5]:
+            col_name = f'review_pct_{score}'
             try:
-                score_pct = reviews[reviews['review_score'] == score].groupby('order_id').size() / reviews.groupby('order_id').size()
-                score_pct.name = f'review_pct_{score}'
+                score_pct = (
+                    reviews[reviews['review_score'] == score]
+                    .groupby('order_id')
+                    .size()
+                    / reviews.groupby('order_id').size()
+                )
+                score_pct.name = col_name
                 reviews_agg = reviews_agg.merge(score_pct, on='order_id', how='left')
-            except:
-                reviews_agg[f'review_pct_{score}'] = 0.0
+            except Exception as e:
+                print(f"   ⚠️ No se pudo calcular {col_name}: {e}")
+                reviews_agg[col_name] = 0.0
         
         reviews_agg = reviews_agg.fillna(0)
         self.data['reviews_features'] = reviews_agg
@@ -103,10 +116,12 @@ class FeatureEngineer:
         )
         
         # Unir todas las tablas
-        df = (items_prod
-              .merge(self.data['orders_with_features'], on='order_id', how='left')
-              .merge(self.data['payments_features'], on='order_id', how='left')
-              .merge(self.data['reviews_features'], on='order_id', how='left'))
+        df = (
+            items_prod
+            .merge(self.data['orders_with_features'], on='order_id', how='left')
+            .merge(self.data['payments_features'], on='order_id', how='left')
+            .merge(self.data['reviews_features'], on='order_id', how='left')
+        )
         
         # Limpieza final
         numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -153,7 +168,20 @@ class FeatureEngineer:
                 agg_dict[col_name] = 'mean'
         
         agg_data = df.groupby(['order_month', 'product_category_name']).agg(agg_dict).reset_index()
-        agg_data.columns = [f'{col[0]}_{col[1]}' if col[1] != '' else col[0] for col in agg_data.columns]
+        
+        # 🔧 Corrección: renombrar columnas manejando strings y tuplas
+        new_cols = []
+        for col in agg_data.columns:
+            if isinstance(col, tuple):
+                base, func = col
+                if func == '' or func is None:
+                    new_cols.append(base)
+                else:
+                    new_cols.append(f"{base}_{func}")
+            else:
+                # Es una columna normal (ej. 'order_month', 'product_category_name')
+                new_cols.append(col)
+        agg_data.columns = new_cols
         
         # Renombrar columnas clave
         agg_data = agg_data.rename(columns={
