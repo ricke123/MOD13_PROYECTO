@@ -1,0 +1,8 @@
+".ipynb_checkpoints/" 
+/data/raw/
+/data/processed/
+/data/model/*.pkl
+*.csv
+*.zip
+*.parquet
+
