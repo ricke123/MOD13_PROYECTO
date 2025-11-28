@@ -1,15 +1,62 @@
-"""
-Módulo para reentrenamiento - CORREGIDO Y OPTIMIZADO PARA train_best_model
-"""
 
 import argparse
 import sys
+import os
 import pandas as pd
 
-from src.data_updater import ejecutar_actualizacion_mensual
-from src.data_loader import DataLoader
-from src.feature_engineer import FeatureEngineer
-from src.model_trainer import ModelTrainer
+# ============================================================
+# CORRECCIÓN DE IMPORTS - USANDO IMPORT RELATIVOS
+# ============================================================
+
+# Agregar el directorio padre al path para imports absolutos
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from data_updater import ejecutar_actualizacion_mensual
+    from data_loader import DataLoader
+    from feature_engineer import FeatureEngineer
+    from model_trainer import ModelTrainer
+    print("✅ Todos los módulos importados correctamente")
+except ImportError as e:
+    print(f"❌ Error importando módulos: {e}")
+    print("💡 Asegúrate de ejecutar desde la raíz del proyecto: python src/run_retraining.py")
+    sys.exit(1)
+
+
+# ============================================================
+# FUNCIONES AUXILIARES PARA MÉTRICAS ORDENADAS
+# ============================================================
+
+def print_metrics_ordered(metrics_dict, title):
+    """Imprime métricas en orden consistente y formateado"""
+    print(f"\n{title}:")
+    print("-" * 50)
+    print(f"  • MAE:  {metrics_dict['MAE']:>10.2f}")
+    print(f"  • RMSE: {metrics_dict['RMSE']:>10.2f}")
+    print(f"  • R²:   {metrics_dict['R²']:>10.4f}")
+    print(f"  • MAPE: {metrics_dict['MAPE']:>10.2f}%")
+    print(f"  • MASE: {metrics_dict['MASE']:>10.4f}")
+
+
+def print_training_comparison(train_metrics, test_metrics):
+    """Muestra comparación entre train y test"""
+    print("\n🔍 COMPARACIÓN ENTRENAMIENTO vs TEST:")
+    print("-" * 50)
+    
+    # Calcular diferencias
+    r2_gap = train_metrics['R²'] - test_metrics['R²']
+    mae_gap = test_metrics['MAE'] - train_metrics['MAE']
+    mape_gap = test_metrics['MAPE'] - train_metrics['MAPE']
+    
+    print(f"  📈 Diferencia R²:     {r2_gap:>10.4f}")
+    print(f"  📊 Diferencia MAE:    {mae_gap:>10.2f}")
+    print(f"  📉 Diferencia MAPE:   {mape_gap:>10.2f}%")
+    
+    # Análisis de sobreajuste
+    if r2_gap > 0.1:
+        print("  ⚠️  ALERTA: Posible sobreajuste detectado")
+    else:
+        print("  ✅ Buen equilibrio entre train y test")
 
 
 # ============================================================
@@ -27,9 +74,13 @@ def run_incremental_retraining():
     print("📥 PASO 1: ACTUALIZACIÓN DE DATOS")
     print("=" * 60)
 
-    updated = ejecutar_actualizacion_mensual()
-    if not updated:
-        print("❌ ERROR: No se pudieron actualizar los datos. Cancelando.")
+    try:
+        updated = ejecutar_actualizacion_mensual()
+        if not updated:
+            print("❌ ERROR: No se pudieron actualizar los datos. Cancelando.")
+            return False
+    except Exception as e:
+        print(f"❌ ERROR en actualización de datos: {e}")
         return False
 
     # --------------------------------------------------------
@@ -88,17 +139,31 @@ def run_incremental_retraining():
             print("❌ FAIL: train_best_model no devolvió un modelo válido.")
             return False
 
-        print("\n🎉 ¡Reentrenamiento incremental completado exitosamente!")
-        print(f"📁 Modelo guardado en: {model_path}")
-        print(f"📈 Métricas train: {train_metrics}")
-        print(f"📈 Métricas test: {test_metrics}")
+        # ============================================================
+        # MÉTRICAS ORDENADAS - PARTE ACTUALIZADA
+        # ============================================================
+        print("\n" + "🎉" * 20)
+        print("🎉 ¡REENTRENAMIENTO INCREMENTAL COMPLETADO EXITOSAMENTE!")
+        print("🎉" * 20)
+        
+        print(f"\n📁 Modelo guardado en: {model_path}")
+        
+        # Mostrar métricas ordenadas
+        print_metrics_ordered(train_metrics, "📈 MÉTRICAS DE ENTRENAMIENTO")
+        print_metrics_ordered(test_metrics, "📊 MÉTRICAS DE TEST")
+        
+        # Mostrar comparación
+        print_training_comparison(train_metrics, test_metrics)
+        
+        print("\n" + "=" * 60)
+        print("✅ PROCESO INCREMENTAL FINALIZADO")
+        print("=" * 60)
 
         return True
 
     except Exception as e:
         print(f"❌ ERROR en reentrenamiento incremental: {e}")
         return False
-
 
 
 # ============================================================
@@ -169,17 +234,31 @@ def run_full_retraining():
             print("❌ FAIL: train_best_model no devolvió un modelo válido.")
             return False
 
-        print("\n🎉 Reentrenamiento COMPLETO exitoso")
-        print(f"📁 Modelo guardado en: {model_path}")
-        print(f"📈 Métricas train: {train_metrics}")
-        print(f"📈 Métricas test: {test_metrics}")
+        # ============================================================
+        # MÉTRICAS ORDENADAS - PARTE ACTUALIZADA
+        # ============================================================
+        print("\n" + "🎉" * 20)
+        print("🎉 ¡REENTRENAMIENTO COMPLETO EXITOSO!")
+        print("🎉" * 20)
+        
+        print(f"\n📁 Modelo guardado en: {model_path}")
+        
+        # Mostrar métricas ordenadas
+        print_metrics_ordered(train_metrics, "📈 MÉTRICAS DE ENTRENAMIENTO")
+        print_metrics_ordered(test_metrics, "📊 MÉTRICAS DE TEST")
+        
+        # Mostrar comparación
+        print_training_comparison(train_metrics, test_metrics)
+        
+        print("\n" + "=" * 60)
+        print("✅ PROCESO COMPLETO FINALIZADO")
+        print("=" * 60)
 
         return True
 
     except Exception as e:
         print(f"❌ ERROR en reentrenamiento completo: {e}")
         return False
-
 
 
 # ============================================================
@@ -215,6 +294,7 @@ def main():
     return success
 
 
-# Compatibilidad con el scheduler
 if __name__ == "__main__":
     main()
+
+

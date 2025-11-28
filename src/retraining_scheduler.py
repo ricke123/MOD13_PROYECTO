@@ -1,6 +1,4 @@
-"""
-Módulo para programación de reentrenamiento automático - VERSIÓN SIN HILOS DAEMON
-"""
+
 import schedule
 import time
 import threading
@@ -8,8 +6,21 @@ from datetime import datetime
 import sys
 import os
 
-from src.run_retraining import run_incremental_retraining, run_full_retraining
-from src.config import RETRAINING_CONFIG
+# ============================================================
+# CORRECCIÓN DE IMPORTS
+# ============================================================
+
+# Agregar el directorio padre al path para imports absolutos
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from run_retraining import run_incremental_retraining, run_full_retraining
+    from config import RETRAINING_CONFIG
+    print("✅ Todos los módulos importados correctamente")
+except ImportError as e:
+    print(f"❌ Error importando módulos: {e}")
+    print("💡 Asegúrate de ejecutar desde la raíz del proyecto: python src/retraining_scheduler.py")
+    sys.exit(1)
 
 
 class RetrainingScheduler:
@@ -271,3 +282,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+

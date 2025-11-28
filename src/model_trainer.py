@@ -26,7 +26,7 @@ class ModelTrainer:
         Path(self.model_dir).mkdir(parents=True, exist_ok=True)
 
     def calculate_comprehensive_metrics(self, y_true, y_pred, y_train=None):
-        """Calcular métricas comprehensivas como en tu EDA"""
+        """Calcular métricas comprehensivas como en tu EDA - MEJORADO"""
         mae = mean_absolute_error(y_true, y_pred)
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
         r2 = r2_score(y_true, y_pred)
@@ -47,12 +47,13 @@ class ModelTrainer:
         else:
             mase = np.inf
 
+        # CONVERTIR a tipos nativos de Python y formatear
         return {
-            'MAE': mae,
-            'RMSE': rmse,
-            'R²': r2,
-            'MAPE': mape,
-            'MASE': mase
+            'MAE': float(mae),
+            'RMSE': float(rmse),
+            'R²': float(r2),
+            'MAPE': float(mape),
+            'MASE': float(mase) if mase != np.inf else float('inf')
         }
 
     def prepare_temporal_data(self, features_df):
@@ -171,8 +172,8 @@ class ModelTrainer:
 
         print(f"\n📊 RESULTADOS MODELO OPTIMIZADO (Test Set):")
         print("=" * 80)
-        print(f"   • MAE:  {metrics_optimized['MAE']:>10,.2f}")
-        print(f"   • RMSE: {metrics_optimized['RMSE']:>10,.2f}")
+        print(f"   • MAE:  {metrics_optimized['MAE']:>10.2f}")
+        print(f"   • RMSE: {metrics_optimized['RMSE']:>10.2f}")
         print(f"   • R²:   {metrics_optimized['R²']:>10.4f}")
         print(f"   • MAPE: {metrics_optimized['MAPE']:>10.2f}%")
         print(f"   • MASE: {metrics_optimized['MASE']:>10.4f}")
@@ -186,8 +187,8 @@ class ModelTrainer:
 
         print(f"\n📊 RESULTADOS MODELO OPTIMIZADO (Train Set):")
         print("=" * 80)
-        print(f"   • MAE:  {train_metrics['MAE']:>10,.2f}")
-        print(f"   • RMSE: {train_metrics['RMSE']:>10,.2f}")
+        print(f"   • MAE:  {train_metrics['MAE']:>10.2f}")
+        print(f"   • RMSE: {train_metrics['RMSE']:>10.2f}")
         print(f"   • R²:   {train_metrics['R²']:>10.4f}")
         print(f"   • MAPE: {train_metrics['MAPE']:>10.2f}%")
         print("=" * 80)
@@ -219,8 +220,8 @@ class ModelTrainer:
 
         print(f"\n📊 RESULTADOS RANDOM FOREST (Test Set):")
         print("=" * 80)
-        print(f"   • MAE:  {test_metrics['MAE']:>10,.2f}")
-        print(f"   • RMSE: {test_metrics['RMSE']:>10,.2f}")
+        print(f"   • MAE:  {test_metrics['MAE']:>10.2f}")
+        print(f"   • RMSE: {test_metrics['RMSE']:>10.2f}")
         print(f"   • R²:   {test_metrics['R²']:>10.4f}")
         print(f"   • MAPE: {test_metrics['MAPE']:>10.2f}%")
         print("=" * 80)
