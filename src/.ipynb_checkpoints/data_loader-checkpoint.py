@@ -1,10 +1,5 @@
-"""
-Módulo para carga y limpieza de datos - VERSIÓN CORREGIDA
-"""
 import pandas as pd
-import numpy as np
-from pathlib import Path
-from config import DATA_FILES, DATE_COLS, DATA_PROCESSED, MODEL_DIR
+from src.config import DATA_FILES, DATE_COLS, DATA_PROCESSED
 
 class DataLoader:
     def __init__(self):
@@ -29,10 +24,10 @@ class DataLoader:
         payments = pd.read_csv(self.data_files['payments'])
         
         print("✅ Datasets cargados exitosamente")
-        print(f"Orders: {orders.shape}")
-        print(f"Items: {items.shape}")
+        print(f"Orders:   {orders.shape}")
+        print(f"Items:    {items.shape}")
         print(f"Products: {products.shape}")
-        print(f"Reviews: {reviews.shape}")
+        print(f"Reviews:  {reviews.shape}")
         print(f"Payments: {payments.shape}")
         
         return orders, items, products, reviews, payments
@@ -49,16 +44,16 @@ class DataLoader:
         
         # Filtrar solo órdenes entregadas
         df_delivered = orders[orders['order_status'] == 'delivered'].copy()
-        print(f"Órdenes totales: {len(orders)}")
-        print(f"Órdenes entregadas: {len(df_delivered)}")
+        print(f"Órdenes totales:     {len(orders)}")
+        print(f"Órdenes entregadas:  {len(df_delivered)}")
         
-        # Unir todos los datasets
-        df = orders.merge(items, on='order_id', how='left')
+        # Unir todos los datasets SOLO con órdenes entregadas
+        df = df_delivered.merge(items, on='order_id', how='left')
         df = df.merge(products, on='product_id', how='left')
         df = df.merge(reviews, on='order_id', how='left')
         df = df.merge(payments, on='order_id', how='left')
         
-        print(f"Dataset unificado: {df.shape}")
+        print(f"Dataset unificado (solo delivered): {df.shape}")
         
         return df
     
@@ -70,8 +65,12 @@ class DataLoader:
             df = pd.read_csv(processed_file)
             
             # Convertir columnas de fecha al cargar
-            date_columns = ['order_purchase_timestamp', 'order_delivered_carrier_date',
-                          'order_delivered_customer_date', 'order_estimated_delivery_date']
+            date_columns = [
+                'order_purchase_timestamp',
+                'order_delivered_carrier_date',
+                'order_delivered_customer_date',
+                'order_estimated_delivery_date'
+            ]
             
             for col in date_columns:
                 if col in df.columns:
@@ -80,7 +79,7 @@ class DataLoader:
             
             return df
         else:
-            print("❌ No se encontraron datos procesados")
+            ## print("❌ No se encontraron datos procesados")
             return None
     
     def save_processed_data(self, df):

@@ -1,401 +1,674 @@
+# src/feature_engineer.py
 """
-Módulo para ingeniería de features - CON 157 FEATURES ESPECÍFICOS
+Módulo de ingeniería de features para forecasting Olist.
+
+1) A partir del dataset limpio a nivel ítem (salida de DataLoader):
+   - Agrega a nivel mensual-categoría.
+   - Construye una master table rica en variables de negocio.
+
+2) Genera:
+   - Features temporales (mes, año, dummies, codificación cíclica).
+   - Features de serie temporal (lags, MA, EMA, crecimiento, momentum, estacionalidad).
+   - Ratios de negocio (ventas por pedido, márgenes, logística, fidelidad, etc.).
+   - Stats por categoría (promedios, z-scores, etc.).
+
+3) Prepara el DataFrame final para el modelo:
+   - Limpieza de NaN e infinitos.
+   - Eliminación de columnas constantes.
+   - Selección automática de hasta 99 features numéricas con XGBoost.
 """
-import pandas as pd
+
 import numpy as np
-from sklearn.feature_selection import SelectFromModel
+import pandas as pd
 from xgboost import XGBRegressor
-from config import DATA_PROCESSED
+
 
 class FeatureEngineer:
     def __init__(self):
-        self.processed_path = DATA_PROCESSED
         self.best_features = None
-        
-    def create_target_variable(self, df):
-        """Crear variable target: demanda del siguiente mes"""
-        print("🎯 Creando variable target...")
-        
-        # Verificar y convertir order_purchase_timestamp a datetime
-        if 'order_purchase_timestamp' in df.columns:
-            if not pd.api.types.is_datetime64_any_dtype(df['order_purchase_timestamp']):
-                print("🔄 Convirtiendo order_purchase_timestamp a datetime...")
-                df['order_purchase_timestamp'] = pd.to_datetime(df['order_purchase_timestamp'], errors='coerce')
-        
-        # 1. Filtrar solo órdenes entregadas
-        df_delivered = df[df['order_status'] == 'delivered'].copy()
-        
-        # 2. Crear variable de mes-año para agrupación
-        df_delivered['purchase_year_month'] = df_delivered['order_purchase_timestamp'].dt.to_period('M')
-        print(f"Rango temporal: {df_delivered['purchase_year_month'].min()} a {df_delivered['purchase_year_month'].max()}")
-        
-        # 3. Calcular demanda mensual por categoría con MÁS MÉTRICAS
-        monthly_demand = df_delivered.groupby(['purchase_year_month', 'product_category_name']).agg({
-            'product_id': 'count',  # Unidades vendidas
-            'price': ['sum', 'mean', 'std', 'max', 'min'],  # Múltiples stats de precio
-            'freight_value': ['sum', 'mean'],  # Stats de flete
-            'order_id': 'nunique',  # Número de órdenes únicas
-            'customer_id': 'nunique', # Clientes únicos
-            'seller_id': 'nunique', # Vendedores únicos
-            'review_score': 'mean',  # Puntuación promedio
-            'payment_installments': ['sum', 'mean', 'max'],  # Stats de cuotas
-            'order_item_id': 'count',  # Items totales
-        }).reset_index()
-        
-        # Aplanar columnas multi-index
-        monthly_demand.columns = ['_'.join(col).strip() if col[1] else col[0] for col in monthly_demand.columns.values]
-        
-        # Renombrar columnas
-        monthly_demand.rename(columns={
-            'product_id_count': 'demand',
-            'price_sum': 'total_sales',
-            'price_mean': 'avg_price',
-            'price_std': 'price_std',
-            'price_max': 'price_max', 
-            'price_min': 'price_min',
-            'freight_value_sum': 'total_freight',
-            'freight_value_mean': 'avg_freight',
-            'order_id_nunique': 'unique_orders',
-            'customer_id_nunique': 'unique_customers',
-            'seller_id_nunique': 'unique_sellers',
-            'review_score_mean': 'avg_review_score',
-            'payment_installments_sum': 'installments_total',
-            'payment_installments_mean': 'installments_avg',
-            'payment_installments_max': 'installments_max',
-            'order_item_id_count': 'payment_count'
-        }, inplace=True)
-        
-        print(f"Registros de demanda mensual: {len(monthly_demand)}")
-        
-        # 4. Crear target: demanda del siguiente mes
-        monthly_demand = monthly_demand.sort_values(['product_category_name', 'purchase_year_month'])
-        monthly_demand['demand_next_month'] = monthly_demand.groupby('product_category_name')['demand'].shift(-1)
-        
-        # 5. Filtrar registros con target disponible
-        monthly_demand_clean = monthly_demand[monthly_demand['demand_next_month'].notna()].copy()
-        
-        print(f"Registros con target disponible: {len(monthly_demand_clean)}")
-        print(f"Porcentaje de completitud: {monthly_demand_clean['demand_next_month'].notna().mean()*100:.1f}%")
-        
-        return monthly_demand_clean
-    
-    def create_advanced_features(self, df):
-        """Crear TODOS los 157 features específicos del EDA"""
-        print("🔧 Creando 157 features avanzados...")
-        
-        # Convertir purchase_year_month a datetime si es Period
-        if hasattr(df['purchase_year_month'], 'dt'):
-            df['purchase_year_month'] = df['purchase_year_month'].dt.to_timestamp()
-        
-        # Features temporales básicos
-        df['year'] = df['purchase_year_month'].dt.year
-        df['month_num'] = df['purchase_year_month'].dt.month
-        df['quarter'] = df['purchase_year_month'].dt.quarter
-        df['week_of_year'] = df['purchase_year_month'].dt.isocalendar().week
-        
-        # Features cíclicos
-        df['month_sin'] = np.sin(2 * np.pi * df['month_num'] / 12)
-        df['month_cos'] = np.cos(2 * np.pi * df['month_num'] / 12)
-        df['quarter_sin'] = np.sin(2 * np.pi * df['quarter'] / 4)
-        df['quarter_cos'] = np.cos(2 * np.pi * df['quarter'] / 4)
-        
-        # Ordenar para cálculos temporales
-        df = df.sort_values(['product_category_name', 'purchase_year_month'])
-        
-        # Crear TODOS los features en el orden exacto de importancia
-        df = self._create_core_temporal_features(df)
-        df = self._create_advanced_statistical_features(df)
-        df = self._create_category_level_features(df)
-        df = self._create_business_metrics(df)
-        df = self._create_growth_momentum_features(df)
-        df = self._create_seasonal_holiday_features(df)
-        df = self._create_delivery_metrics(df)
-        df = self._create_financial_ratios(df)
-        
-        return df
-    
-    def _create_core_temporal_features(self, df):
-        """Features temporales principales"""
-        print("   📅 Creando features temporales principales...")
-        
-        # LAGS de demanda (los más importantes)
-        for lag in [1, 2, 3, 6, 12]:
-            df[f'demand_lag_{lag}'] = df.groupby('product_category_name')['demand'].shift(lag)
-        
-        # LAGS de ventas
-        for lag in [1, 2, 3, 6, 12]:
-            df[f'sales_lag_{lag}'] = df.groupby('product_category_name')['total_sales'].shift(lag)
-        
-        # LAGS de precio
-        for lag in [1, 2, 3, 6, 12]:
-            df[f'price_lag_{lag}'] = df.groupby('product_category_name')['avg_price'].shift(lag)
-        
-        # LAGS de reviews
-        for lag in [1, 2, 3, 6, 12]:
-            df[f'review_lag_{lag}'] = df.groupby('product_category_name')['avg_review_score'].shift(lag)
-        
-        # MEDIAS MÓVILES (ma_2, ma_3, ma_6, ma_12)
-        for window in [2, 3, 6, 12]:
-            df[f'ma_{window}'] = df.groupby('product_category_name')['demand'].transform(
-                lambda x: x.rolling(window, min_periods=1).mean()
+
+    # ------------------------------------------------------------------
+    # 1. CREACIÓN DE TARGET A NIVEL MENSUAL-CATEGORÍA (AGG BÁSICO)
+    # ------------------------------------------------------------------
+    def create_target_variable(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Crea la tabla agregada mensual por categoría (agg_data),
+        similar al notebook, con 'demand' como conteo de items.
+
+        Siempre devuelve la columna 'purchase_year_month'.
+        """
+        df = df.copy()
+
+        # --------------------------------------------------------------
+        # Determinar columna base de mes / fecha y estandarizar
+        # --------------------------------------------------------------
+        if "purchase_year_month" in df.columns:
+            # ya viene lista (string o Period)
+            df["purchase_year_month"] = df["purchase_year_month"].astype(str)
+        elif "order_year" in df.columns and "order_month" in df.columns:
+            # combinación año-mes
+            df["purchase_year_month"] = (
+                df["order_year"].astype(str)
+                + "-"
+                + df["order_month"].astype(int).astype(str).str.zfill(2)
             )
-        
-        # EMA (ema_0.3, ema_0.5, ema_0.7)
-        for alpha in [0.3, 0.5, 0.7]:
-            df[f'ema_{alpha}'] = df.groupby('product_category_name')['demand'].transform(
-                lambda x: x.ewm(alpha=alpha, adjust=False).mean()
+        elif "order_month" in df.columns:
+            df["purchase_year_month"] = df["order_month"].astype(str)
+        elif "order_purchase_timestamp" in df.columns:
+            df["purchase_year_month"] = (
+                pd.to_datetime(df["order_purchase_timestamp"], errors="coerce")
+                .dt.to_period("M")
+                .astype(str)
             )
-        
-        # Medias móviles de ventas
-        for window in [2, 3, 6, 12]:
-            df[f'sales_ma_{window}'] = df.groupby('product_category_name')['total_sales'].transform(
-                lambda x: x.rolling(window, min_periods=1).mean()
+        else:
+            raise ValueError(
+                "❌ No se encontró ninguna columna de fecha mensual "
+                "('purchase_year_month', 'order_year'+'order_month' o "
+                "'order_purchase_timestamp')."
             )
-        
-        return df
-    
-    def _create_advanced_statistical_features(self, df):
-        """Features estadísticos avanzados"""
-        print("   📊 Creando features estadísticos avanzados...")
-        
-        # Estadísticos de demanda (std, min, max)
-        for window in [3, 6, 12]:
-            df[f'demand_std_{window}'] = df.groupby('product_category_name')['demand'].transform(
-                lambda x: x.rolling(window, min_periods=1).std()
+
+        # --------------------------------------------------------------
+        # Construir diccionario de agregación (solo columnas existentes)
+        # --------------------------------------------------------------
+        agg_dict: dict = {}
+
+        # Volumen y clientes
+        if "product_id" in df.columns:
+            agg_dict["product_id"] = ["count", "nunique"]
+        if "order_id" in df.columns:
+            agg_dict["order_id"] = "nunique"
+        if "customer_id" in df.columns:
+            agg_dict["customer_id"] = "nunique"
+        if "seller_id" in df.columns:
+            agg_dict["seller_id"] = "nunique"
+
+        # Precios y flete
+        if "price" in df.columns:
+            agg_dict["price"] = ["sum", "mean", "std", "min", "max"]
+        if "freight_value" in df.columns:
+            agg_dict["freight_value"] = ["sum", "mean"]
+
+        # Pagos agregados
+        if "payment_total" in df.columns:
+            agg_dict["payment_total"] = ["sum", "mean"]
+        if "payment_avg" in df.columns:
+            agg_dict["payment_avg"] = "mean"
+        if "payment_count" in df.columns:
+            agg_dict["payment_count"] = "mean"
+        if "installments_avg" in df.columns:
+            agg_dict["installments_avg"] = "mean"
+
+        # Reviews
+        if "review_score_mean" in df.columns:
+            agg_dict["review_score_mean"] = "mean"
+        if "review_count" in df.columns:
+            agg_dict["review_count"] = "sum"
+
+        # Logística
+        if "delivery_time_days" in df.columns:
+            agg_dict["delivery_time_days"] = ["mean", "std"]
+        if "delivery_delay" in df.columns:
+            agg_dict["delivery_delay"] = "mean"
+        if "is_delayed" in df.columns:
+            agg_dict["is_delayed"] = "mean"
+
+        # Porcentajes de tipo de pago
+        for pt in ["credit_card", "boleto", "voucher", "debit_card"]:
+            col_name = f"pct_{pt}"
+            if col_name in df.columns:
+                agg_dict[col_name] = "mean"
+
+        # Porcentajes de review
+        for score in [1, 2, 3, 4, 5]:
+            col_name = f"review_pct_{score}"
+            if col_name in df.columns:
+                agg_dict[col_name] = "mean"
+
+        if not agg_dict:
+            raise ValueError(
+                "❌ No se encontraron columnas esperadas para agregación en create_target_variable."
             )
-            df[f'demand_min_{window}'] = df.groupby('product_category_name')['demand'].transform(
-                lambda x: x.rolling(window, min_periods=1).min()
-            )
-            df[f'demand_max_{window}'] = df.groupby('product_category_name')['demand'].transform(
-                lambda x: x.rolling(window, min_periods=1).max()
-            )
-        
-        # Estadísticos de precio
-        for window in [3, 6, 12]:
-            df[f'price_std_{window}'] = df.groupby('product_category_name')['avg_price'].transform(
-                lambda x: x.rolling(window, min_periods=1).std()
-            )
-        
-        # Medias móviles de precio
-        for window in [2, 3, 6, 12]:
-            df[f'price_ma_{window}'] = df.groupby('product_category_name')['avg_price'].transform(
-                lambda x: x.rolling(window, min_periods=1).mean()
-            )
-        
-        # Medias móviles de reviews
-        for window in [2, 3, 6, 12]:
-            df[f'review_ma_{window}'] = df.groupby('product_category_name')['avg_review_score'].transform(
-                lambda x: x.rolling(window, min_periods=1).mean()
-            )
-        
-        return df
-    
-    def _create_category_level_features(self, df):
-        """Features a nivel de categoría"""
-        print("   🏷️ Creando features de categoría...")
-        
-        # Estadísticos por categoría
-        category_stats = df.groupby('product_category_name').agg({
-            'demand': ['mean', 'median', 'std', 'max'],
-            'avg_price': ['mean', 'std'],
-            'avg_review_score': ['mean'],
-            'total_sales': ['mean'],
-        }).round(4)
-        
-        category_stats.columns = ['_'.join(col).strip() for col in category_stats.columns.values]
-        category_stats = category_stats.rename(columns={
-            'demand_mean': 'category_avg_demand',
-            'demand_median': 'category_median_demand', 
-            'demand_std': 'category_std_demand',
-            'demand_max': 'category_max_demand',
-            'avg_price_mean': 'category_avg_price',
-            'avg_price_std': 'category_std_price',
-            'avg_review_score_mean': 'category_avg_review',
-            'total_sales_mean': 'category_avg_sales'
-        })
-        
-        df = df.merge(category_stats, on='product_category_name', how='left')
-        
-        # Comparación con categoría
-        df['demand_vs_category_avg'] = df['demand'] / df['category_avg_demand']
-        df['price_vs_category_avg'] = df['avg_price'] / df['category_avg_price']
-        df['review_vs_category_avg'] = df['avg_review_score'] / df['category_avg_review']
-        
-        # Z-scores
-        df['demand_z_score'] = (df['demand'] - df['category_avg_demand']) / df['category_std_demand']
-        df['price_z_score'] = (df['avg_price'] - df['category_avg_price']) / df['category_std_price']
-        
-        return df
-    
-    def _create_business_metrics(self, df):
-        """Métricas de negocio"""
-        print("   💼 Creando métricas de negocio...")
-        
-        # Features de concentración y eficiencia
-        df['seller_concentration'] = df['unique_sellers'] / df['demand'].replace(0, 1)
-        df['items_per_order'] = df['demand'] / df['unique_orders'].replace(0, 1)
-        df['sales_per_order'] = df['total_sales'] / df['unique_orders'].replace(0, 1)
-        df['avg_order_value'] = df['total_sales'] / df['unique_orders'].replace(0, 1)
-        df['avg_items_per_product'] = df['demand'] / df.groupby(['product_category_name', 'purchase_year_month'])['demand'].transform('count')
-        
-        # Diversidad
-        df['product_diversity_index'] = df['unique_sellers'] * df['unique_customers'] / df['demand'].replace(0, 1)
-        df['unique_products'] = df.groupby(['product_category_name', 'purchase_year_month'])['demand'].transform('count')
-        
-        # Acumulados anuales
-        df['cumulative_demand_year'] = df.groupby(['product_category_name', 'year'])['demand'].cumsum()
-        df['cumulative_sales_year'] = df.groupby(['product_category_name', 'year'])['total_sales'].cumsum()
-        
-        return df
-    
-    def _create_growth_momentum_features(self, df):
-        """Features de crecimiento y momentum"""
-        print("   📈 Creando features de crecimiento...")
-        
-        # Crecimiento mensual
-        df['demand_growth_1m'] = df.groupby('product_category_name')['demand'].pct_change(1)
-        df['demand_growth_3m'] = df.groupby('product_category_name')['demand'].pct_change(3)
-        df['demand_growth_12m'] = df.groupby('product_category_name')['demand'].pct_change(12)
-        
-        df['sales_growth_1m'] = df.groupby('product_category_name')['total_sales'].pct_change(1)
-        df['price_growth_1m'] = df.groupby('product_category_name')['avg_price'].pct_change(1)
-        
-        # Momentum
-        df['demand_momentum_3m'] = df['demand'] / df['demand_lag_3'].replace(0, 1) - 1
-        df['demand_momentum_12m'] = df['demand'] / df['demand_lag_12'].replace(0, 1) - 1
-        df['sales_momentum_3m'] = df['total_sales'] / df['sales_lag_3'].replace(0, 1) - 1
-        
-        # Aceleración
-        df['demand_acceleration'] = df['demand_growth_1m'] - df['demand_growth_1m'].shift(1)
-        
-        # Diferencias estacionales
-        df['seasonal_difference_12m'] = df['demand'] - df['demand_lag_12']
-        df['seasonal_ratio_12m'] = df['demand'] / df['demand_lag_12'].replace(0, 1)
-        
-        # Tendencias
-        df['demand_trend_3m'] = df.groupby('product_category_name')['demand'].transform(
-            lambda x: x.rolling(3, min_periods=1).apply(lambda y: np.polyfit(range(len(y)), y, 1)[0] if len(y) > 1 else 0)
+
+        # --------------------------------------------------------------
+        # Agregación mensual-categoría usando purchase_year_month
+        # --------------------------------------------------------------
+        agg_data = (
+            df.groupby(["purchase_year_month", "product_category_name"])
+            .agg(agg_dict)
+            .reset_index()
         )
-        
-        # Crecimiento interanual
-        df['yoy_demand_growth'] = df.groupby('product_category_name')['demand'].pct_change(12)
-        df['yoy_sales_growth'] = df.groupby('product_category_name')['total_sales'].pct_change(12)
-        df['yoy_price_growth'] = df.groupby('product_category_name')['avg_price'].pct_change(12)
-        
-        # Crecimiento mes a mes
-        df['mom_demand_growth'] = df['demand_growth_1m']
-        df['mom_sales_growth'] = df['sales_growth_1m']
-        
-        return df
-    
-    def _create_seasonal_holiday_features(self, df):
-        """Features estacionales y de temporada brasileña"""
-        print("   🎄 Creando features estacionales brasileñas...")
-        
-        # Estacionalidad brasileña PRINCIPAL
-        df['is_black_friday_month_br'] = df['month_num'].isin([11]).astype(int)
-        df['is_january_sales_br'] = df['month_num'].isin([1]).astype(int)
-        df['is_carnival_br'] = df['month_num'].isin([2]).astype(int)
-        df['is_back_to_school_br'] = df['month_num'].isin([1, 2]).astype(int)
-        df['is_good_friday_br'] = df['month_num'].isin([3, 4]).astype(int)  # Marzo/Abril
-        df['is_labor_day_br'] = df['month_num'].isin([5]).astype(int)
-        df['is_tax_season_br'] = df['month_num'].isin([4, 5]).astype(int)  # Abril/Mayo
-        
-        # Temporadas brasileñas
-        df['is_summer_br'] = df['month_num'].isin([12, 1, 2]).astype(int)
-        df['is_autumn_br'] = df['month_num'].isin([3, 4, 5]).astype(int)
-        df['is_winter_br'] = df['month_num'].isin([6, 7, 8]).astype(int)
-        df['is_spring_br'] = df['month_num'].isin([9, 10, 11]).astype(int)
-        
-        # Meses específicos
-        df['is_july'] = (df['month_num'] == 7).astype(int)
-        df['is_november'] = (df['month_num'] == 11).astype(int)
-        
-        # Vacaciones escolares
-        df['is_school_holidays_dec_jan'] = df['month_num'].isin([12, 1]).astype(int)
-        df['is_school_holidays_jul'] = (df['month_num'] == 7).astype(int)
-        
-        # Temporada de lluvias (Noreste)
-        df['is_rainy_season_ne'] = df['month_num'].isin([3, 4, 5, 6]).astype(int)
-        
-        # Fin de semana largo
-        df['is_long_weekend_br'] = df['month_num'].isin([2, 4, 5, 9, 10, 11]).astype(int)
-        
-        # Temporada de compras
-        df['is_holiday_season'] = df['month_num'].isin([11, 12]).astype(int)
-        df['is_mid_year'] = df['month_num'].isin([6, 7]).astype(int)
-        df['is_end_quarter'] = df['month_num'].isin([3, 6, 9, 12]).astype(int)
-        
-        # Efectos especiales
-        df['black_friday_premium_effect'] = (df['month_num'] == 11).astype(int) * df['avg_price']
-        df['summer_beauty_effect'] = (df['month_num'].isin([12, 1, 2])).astype(int)
-        df['winter_fashion_effect'] = (df['month_num'].isin([6, 7, 8])).astype(int)
-        df['summer_sports_effect'] = (df['month_num'].isin([12, 1, 2])).astype(int)
-        df['winter_electronics_effect'] = (df['month_num'].isin([6, 7, 8])).astype(int)
-        
-        # Efecto 13º salario
-        df['thirteenth_salary_boost'] = df['month_num'].isin([11, 12]).astype(int)
-        
-        return df
-    
-    def _create_delivery_metrics(self, df):
-        """Métricas de entrega (si están disponibles en los datos)"""
-        print("   🚚 Creando métricas de entrega...")
-        
-        # Simular métricas de entrega basadas en lags temporales
-        # En un caso real, estas vendrían de los datos de orders
-        for lag in [1, 2, 3, 6, 12]:
-            df[f'delivery_lag_{lag}'] = df.groupby('product_category_name')['demand'].shift(lag) * 0.1  # Simulado
-        
-        # Métricas de eficiencia de entrega simuladas
-        df['avg_delivery_time_days'] = 10 + np.random.normal(0, 2, len(df))  # Simulado
-        df['delivery_time_days_std'] = 2 + np.random.normal(0, 0.5, len(df))  # Simulado
-        df['avg_delivery_delay'] = np.random.normal(2, 1, len(df))  # Simulado
-        df['pct_delayed_orders'] = np.random.uniform(0.05, 0.15, len(df))  # Simulado
-        df['delivery_efficiency'] = 1 - df['pct_delayed_orders']
-        df['on_time_delivery_rate'] = 1 - df['pct_delayed_orders']
-        
-        return df
-    
-    def _create_financial_ratios(self, df):
-        """Ratios financieros"""
-        print("   💰 Creando ratios financieros...")
-        
-        # Ratios financieros
-        df['freight_to_sales_ratio'] = df['total_freight'] / df['total_sales'].replace(0, 1)
-        df['price_to_freight_ratio'] = df['avg_price'] / (df['total_freight'] / df['demand'].replace(0, 1))
-        
-        # Volatilidad
-        df['demand_volatility_6m'] = df['demand_std_6'] / df['ma_6'].replace(0, 1)
-        df['price_volatility_6m'] = df['price_std_6'] / df['price_ma_6'].replace(0, 1)
-        
-        # Margen de beneficio estimado
-        df['profit_margin_estimate'] = (df['total_sales'] - df['total_freight']) / df['total_sales'].replace(0, 1)
-        
-        return df
-    
-    def select_best_features(self, features_df, target_col='demand_next_month', threshold=0.0001):
-        """Seleccionar mejores features basado en importancia - VERSIÓN MEJORADA"""
-        print("🎯 Seleccionando mejores features...")
-        
-        # Excluir columnas no features
-        exclude_cols = [target_col, 'purchase_year_month', 'product_category_name']
-        feature_cols = [col for col in features_df.columns if col not in exclude_cols]
-        
-        X = features_df[feature_cols]
-        y = features_df[target_col]
-        
-        # Eliminar columnas con todos NaN
-        X = X.dropna(axis=1, how='all')
-        
-        # Llenar NaN restantes
-        X = X.fillna(0)
-        
-        # Reemplazar infinitos
+
+        # Renombrar columnas múltiples tipo ('col','sum') → 'col_sum'
+        new_cols = []
+        for col in agg_data.columns:
+            if isinstance(col, tuple):
+                base, func = col
+                if func:
+                    new_cols.append(f"{base}_{func}")
+                else:
+                    new_cols.append(base)
+            else:
+                new_cols.append(col)
+        agg_data.columns = new_cols
+
+        # Renombres clave
+        rename_map = {}
+        if "product_id_count" in agg_data.columns:
+            rename_map["product_id_count"] = "demand"
+        if "product_id_nunique" in agg_data.columns:
+            rename_map["product_id_nunique"] = "unique_products"
+        if "order_id_nunique" in agg_data.columns:
+            rename_map["order_id_nunique"] = "unique_orders"
+        if "customer_id_nunique" in agg_data.columns:
+            rename_map["customer_id_nunique"] = "unique_customers"
+        if "seller_id_nunique" in agg_data.columns:
+            rename_map["seller_id_nunique"] = "unique_sellers"
+        if "price_sum" in agg_data.columns:
+            rename_map["price_sum"] = "total_sales"
+        if "price_mean" in agg_data.columns:
+            rename_map["price_mean"] = "avg_price"
+        if "freight_value_sum" in agg_data.columns:
+            rename_map["freight_value_sum"] = "total_freight"
+        if "freight_value_mean" in agg_data.columns:
+            rename_map["freight_value_mean"] = "avg_freight"
+        if "payment_total_sum" in agg_data.columns:
+            rename_map["payment_total_sum"] = "total_payments"
+        if "payment_total_mean" in agg_data.columns:
+            rename_map["payment_total_mean"] = "avg_payment"
+        if "review_score_mean_mean" in agg_data.columns:
+            rename_map["review_score_mean_mean"] = "avg_review_score"
+        if "delivery_time_days_mean" in agg_data.columns:
+            rename_map["delivery_time_days_mean"] = "avg_delivery_time_days"
+        if "delivery_delay_mean" in agg_data.columns:
+            rename_map["delivery_delay_mean"] = "avg_delivery_delay"
+        if "is_delayed_mean" in agg_data.columns:
+            rename_map["is_delayed_mean"] = "pct_delayed_orders"
+
+        agg_data = agg_data.rename(columns=rename_map)
+
+        print(f"Agg mensual-categoría (agg_data): {agg_data.shape}")
+        print(f" monthly_demand: {agg_data.shape}")
+
+        return agg_data
+
+    # ------------------------------------------------------------------
+    # 2. CREACIÓN DE FEATURES AVANZADOS (INGENIERÍA PESADA)
+    # ------------------------------------------------------------------
+    def create_advanced_features(self, agg_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Construye la MASTER table con target demand_next_month
+        y features avanzados.
+        """
+        df = agg_data.copy()
+
+        # --------------------------------------------------------------
+        # FEATURES TEMPORALES BÁSICAS
+        # --------------------------------------------------------------
+        # Tolerante a distintos formatos / ubicaciones
+        if "purchase_year_month" not in df.columns:
+            # Puede venir como índice
+            if isinstance(df.index, pd.MultiIndex) and "purchase_year_month" in df.index.names:
+                df = df.reset_index()
+            elif df.index.name == "purchase_year_month":
+                df = df.reset_index()
+            elif "order_year" in df.columns and "order_month" in df.columns:
+                df["purchase_year_month"] = (
+                    df["order_year"].astype(str)
+                    + "-"
+                    + df["order_month"].astype(int).astype(str).str.zfill(2)
+                )
+            elif "order_month" in df.columns:
+                df["purchase_year_month"] = df["order_month"].astype(str)
+                print("ℹ️ 'purchase_year_month' creado desde 'order_month'.")
+            else:
+                raise KeyError(
+                    "❌ create_advanced_features espera la columna 'purchase_year_month' "
+                    "o 'order_year'+'order_month' / 'order_month' para poder derivarla.\n"
+                    f"Columnas disponibles: {list(df.columns)}"
+                )
+
+        df["purchase_year_month"] = df["purchase_year_month"].astype(str)
+
+        df["date"] = pd.to_datetime(df["purchase_year_month"] + "-01", errors="coerce")
+        df["year"] = df["date"].dt.year
+        df["month_num"] = df["date"].dt.month
+        df["quarter"] = df["date"].dt.quarter
+        df["month_year"] = df["date"].dt.strftime("%Y-%m")
+
+        # Codificación cíclica mes / trimestre
+        df["month_sin"] = np.sin(2 * np.pi * df["month_num"] / 12)
+        df["month_cos"] = np.cos(2 * np.pi * df["month_num"] / 12)
+        df["quarter_sin"] = np.sin(2 * np.pi * df["quarter"] / 4)
+        df["quarter_cos"] = np.cos(2 * np.pi * df["quarter"] / 4)
+
+        # Dummies de temporada
+        df["is_holiday_season"] = df["month_num"].isin([11, 12]).astype(int)
+        df["is_beginning_year"] = df["month_num"].isin([1, 2]).astype(int)
+        df["is_mid_year"] = df["month_num"].isin([6, 7]).astype(int)
+        df["is_end_quarter"] = df["month_num"].isin([3, 6, 9, 12]).astype(int)
+
+        # Dummies por mes
+        important_months = {
+            1: "january",
+            2: "february",
+            3: "march",
+            4: "april",
+            5: "may",
+            6: "june",
+            7: "july",
+            8: "august",
+            9: "september",
+            10: "october",
+            11: "november",
+            12: "december",
+        }
+        for m_num, m_name in important_months.items():
+            df[f"is_{m_name}"] = (df["month_num"] == m_num).astype(int)
+
+        # Dummies por quarter
+        for q in range(1, 5):
+            df[f"is_quarter_{q}"] = (df["quarter"] == q).astype(int)
+
+        print(f"Agg con features temporales básicas: {df.shape}")
+
+        # --------------------------------------------------------------
+        # FEATURES DE SERIE TEMPORAL (LAGS, MA, EMA, CRECIMIENTO)
+        # --------------------------------------------------------------
+        def add_temporal_features(group: pd.DataFrame) -> pd.DataFrame:
+            group = group.sort_values("date").copy()
+
+            if "demand" not in group.columns:
+                raise KeyError(
+                    "❌ La columna 'demand' no está en el DataFrame agregado. "
+                    "Revisa create_target_variable."
+                )
+
+            # Target t+1
+            group["demand_next_month"] = group["demand"].shift(-1)
+
+            # LAGS COMPLETOS
+            for lag in [1, 2, 3, 6, 12]:
+                group[f"demand_lag_{lag}"] = group["demand"].shift(lag)
+                if "total_sales" in group.columns:
+                    group[f"sales_lag_{lag}"] = group["total_sales"].shift(lag)
+                if "avg_price" in group.columns:
+                    group[f"price_lag_{lag}"] = group["avg_price"].shift(lag)
+                if "avg_review_score" in group.columns:
+                    group[f"review_lag_{lag}"] = group["avg_review_score"].shift(lag)
+                if "avg_delivery_time_days" in group.columns:
+                    group[f"delivery_lag_{lag}"] = group["avg_delivery_time_days"].shift(
+                        lag
+                    )
+
+            # MOVING AVERAGES
+            for window in [2, 3, 6, 12]:
+                group[f"ma_{window}"] = (
+                    group["demand"].rolling(window, min_periods=1).mean().shift(1)
+                )
+                if "total_sales" in group.columns:
+                    group[f"sales_ma_{window}"] = (
+                        group["total_sales"]
+                        .rolling(window, min_periods=1)
+                        .mean()
+                        .shift(1)
+                    )
+                if "avg_price" in group.columns:
+                    group[f"price_ma_{window}"] = (
+                        group["avg_price"]
+                        .rolling(window, min_periods=1)
+                        .mean()
+                        .shift(1)
+                    )
+                if "avg_review_score" in group.columns:
+                    group[f"review_ma_{window}"] = (
+                        group["avg_review_score"]
+                        .rolling(window, min_periods=1)
+                        .mean()
+                        .shift(1)
+                    )
+
+            # MOVING STATISTICS
+            for window in [3, 6, 12]:
+                group[f"demand_std_{window}"] = (
+                    group["demand"].rolling(window, min_periods=1).std().shift(1)
+                )
+                group[f"demand_min_{window}"] = (
+                    group["demand"].rolling(window, min_periods=1).min().shift(1)
+                )
+                group[f"demand_max_{window}"] = (
+                    group["demand"].rolling(window, min_periods=1).max().shift(1)
+                )
+                if "avg_price" in group.columns:
+                    group[f"price_std_{window}"] = (
+                        group["avg_price"]
+                        .rolling(window, min_periods=1)
+                        .std()
+                        .shift(1)
+                    )
+
+            # EXPONENTIAL MOVING AVERAGES
+            for alpha in [0.3, 0.5, 0.7]:
+                group[f"ema_{alpha}"] = (
+                    group["demand"].ewm(alpha=alpha).mean().shift(1)
+                )
+
+            # GROWTH RATES
+            group["demand_growth_1m"] = group["demand"].pct_change(1)
+            group["demand_growth_3m"] = group["demand"].pct_change(3)
+            group["demand_growth_12m"] = group["demand"].pct_change(12)
+            if "total_sales" in group.columns:
+                group["sales_growth_1m"] = group["total_sales"].pct_change(1)
+            if "avg_price" in group.columns:
+                group["price_growth_1m"] = group["avg_price"].pct_change(1)
+
+            # MOMENTUM
+            group["demand_momentum_3m"] = group["demand"] - group["demand"].shift(3)
+            group["demand_momentum_12m"] = group["demand"] - group["demand"].shift(12)
+            if "total_sales" in group.columns:
+                group["sales_momentum_3m"] = (
+                    group["total_sales"] - group["total_sales"].shift(3)
+                )
+
+            # SEASONALIDAD
+            if len(group) >= 13:
+                group["seasonal_ratio_12m"] = group["demand"] / group["demand"].shift(
+                    12
+                )
+                group["seasonal_difference_12m"] = (
+                    group["demand"] - group["demand"].shift(12)
+                )
+
+            # VOLATILIDAD
+            group["demand_volatility_6m"] = group["demand"].rolling(6).std().shift(
+                1
+            ) / (group["demand"].rolling(6).mean().shift(1) + 1e-8)
+            if "avg_price" in group.columns:
+                group["price_volatility_6m"] = group["avg_price"].rolling(6).std().shift(
+                    1
+                ) / (group["avg_price"].rolling(6).mean().shift(1) + 1e-8)
+
+            # ACELERACIÓN
+            group["demand_acceleration"] = group["demand_growth_1m"].diff(1)
+
+            # TENDENCIA
+            if len(group) >= 3:
+                group["demand_trend_3m"] = group["demand"].diff(3) / 3
+
+            return group
+
+        master = df.groupby("product_category_name", group_keys=False).apply(
+            add_temporal_features
+        )
+        print(f"Master tras temporal features: {master.shape}")
+
+        # --------------------------------------------------------------
+        # FEATURES DE INTERACCIÓN Y RATIOS DE NEGOCIO
+        # --------------------------------------------------------------
+        def safe_ratio(num_col, den_col, name):
+            if num_col in master.columns and den_col in master.columns:
+                master[name] = master[num_col] / (master[den_col] + 1e-8)
+
+        # Básicos de negocio
+        if {"total_sales", "unique_orders"}.issubset(master.columns):
+            master["sales_per_order"] = master["total_sales"] / (
+                master["unique_orders"] + 1
+            )
+            master["avg_order_value"] = master["total_sales"] / (
+                master["unique_orders"] + 1
+            )
+
+        if {"demand", "unique_orders"}.issubset(master.columns):
+            master["items_per_order"] = master["demand"] / (
+                master["unique_orders"] + 1
+            )
+
+        if {"unique_orders", "unique_customers"}.issubset(master.columns):
+            master["conversion_rate"] = master["unique_orders"] / (
+                master["unique_customers"] + 1
+            )
+
+        if {"avg_price", "avg_freight"}.issubset(master.columns):
+            safe_ratio("avg_price", "avg_freight", "price_to_freight_ratio")
+        if {"total_freight", "total_sales"}.issubset(master.columns):
+            safe_ratio("total_freight", "total_sales", "freight_to_sales_ratio")
+        if {"avg_price", "avg_freight"}.issubset(master.columns):
+            master["profit_margin_estimate"] = (
+                master["avg_price"] - master["avg_freight"]
+            ) / (master["avg_price"] + 1e-8)
+
+        if {"unique_orders", "unique_customers"}.issubset(master.columns):
+            master["customer_loyalty_index"] = master["unique_orders"] / (
+                master["unique_customers"] + 1
+            )
+        if {"unique_orders", "unique_sellers"}.issubset(master.columns):
+            master["seller_concentration"] = master["unique_orders"] / (
+                master["unique_sellers"] + 1
+            )
+
+        if {"unique_products", "demand"}.issubset(master.columns):
+            master["product_diversity_index"] = master["unique_products"] / (
+                master["demand"] + 1
+            )
+            master["avg_items_per_product"] = master["demand"] / (
+                master["unique_products"] + 1
+            )
+
+        if "pct_delayed_orders" in master.columns:
+            master["on_time_delivery_rate"] = 1 - master["pct_delayed_orders"]
+        if {"avg_delivery_time_days", "avg_delivery_delay"}.issubset(master.columns):
+            master["delivery_efficiency"] = master["avg_delivery_time_days"] / (
+                master["avg_delivery_delay"].abs() + 1
+            )
+
+        # Pagos y reviews derivados
+        if "installments_avg_mean" in master.columns:
+            master["avg_installments_per_order"] = master["installments_avg_mean"]
+
+        if (
+            "pct_credit_card_mean" in master.columns
+            and "pct_boleto_mean" in master.columns
+        ):
+            master["credit_card_usage_ratio"] = master["pct_credit_card_mean"] / (
+                master["pct_boleto_mean"] + 0.01
+            )
+
+        if (
+            "review_pct_5_mean" in master.columns
+            and "review_pct_1_mean" in master.columns
+        ):
+            master["review_sentiment_score"] = (
+                master["review_pct_5_mean"] - master["review_pct_1_mean"]
+            )
+
+        if (
+            "review_count_sum" in master.columns
+            and "unique_orders" in master.columns
+        ):
+            master["review_engagement_rate"] = master["review_count_sum"] / (
+                master["unique_orders"] + 1
+            )
+
+        print(f"Master tras ratios de negocio: {master.shape}")
+
+        # --------------------------------------------------------------
+        # FEATURES DE AGREGACIÓN MULTINIVEL (categoría)
+        # --------------------------------------------------------------
+        cols_for_cat = {}
+        if "demand" in master.columns:
+            cols_for_cat["demand"] = ["mean", "std", "median", "max"]
+        if "avg_price" in master.columns:
+            cols_for_cat["avg_price"] = ["mean", "std"]
+        if "avg_review_score" in master.columns:
+            cols_for_cat["avg_review_score"] = "mean"
+
+        if cols_for_cat:
+            category_stats = (
+                master.groupby("product_category_name")
+                .agg(cols_for_cat)
+                .reset_index()
+            )
+
+            # aplanar
+            cat_cols = ["product_category_name"]
+            for base, funcs in cols_for_cat.items():
+                if isinstance(funcs, list):
+                    for f in funcs:
+                        cat_cols.append(f"category_{base}_{f}")
+                else:
+                    cat_cols.append(f"category_{base}_{funcs}")
+            category_stats.columns = cat_cols
+
+            master = master.merge(category_stats, on="product_category_name", how="left")
+
+            # ratios y z-scores
+            if {"demand", "category_demand_mean"}.issubset(master.columns):
+                master["demand_vs_category_avg"] = master["demand"] / (
+                    master["category_demand_mean"] + 1e-8
+                )
+            if {"avg_price", "category_avg_price_mean"}.issubset(master.columns):
+                master["price_vs_category_avg"] = master["avg_price"] / (
+                    master["category_avg_price_mean"] + 1e-8
+                )
+            if {
+                "avg_review_score",
+                "category_avg_review_score_mean",
+            }.issubset(master.columns):
+                master["review_vs_category_avg"] = master["avg_review_score"] / (
+                    master["category_avg_review_score_mean"] + 1e-8
+                )
+
+        print(f"Master tras stats de categoría: {master.shape}")
+
+        # --------------------------------------------------------------
+        # LIMPIEZA FINAL DE MASTER
+        # --------------------------------------------------------------
+        master = master.dropna(subset=["demand_next_month"]).reset_index(drop=True)
+        master = master.fillna(0)
+        master = master.replace([np.inf, -np.inf], 0)
+
+        numeric_cols_master = master.select_dtypes(include=[np.number]).columns
+        constant_cols = [
+            col for col in numeric_cols_master if master[col].nunique() <= 1
+        ]
+        master = master.drop(columns=constant_cols)
+
+        print("\n=== MASTER FINAL ===")
+        print("Shape:", master.shape)
+        print("Columnas constantes eliminadas:", len(constant_cols))
+        print(f" monthly_demand_with_features: {master.shape}")
+
+        return master
+
+    # ------------------------------------------------------------------
+    # 3. PREPARACIÓN FINAL PARA EL MODELO + SELECCIÓN DE FEATURES
+    # ------------------------------------------------------------------
+    def prepare_model_features(
+        self,
+        df: pd.DataFrame,
+        use_feature_selection: bool = True,
+        target_col: str = "demand_next_month",
+    ) -> pd.DataFrame:
+        """
+        Preparar features finales para el modelo.
+        Mantiene 'purchase_year_month' para splits temporales.
+        """
+        print("📊 Preparando features para el modelo...")
+
+        df = df.copy()
+
+        cols_to_drop = ["product_category_name"]
+        features_df = df.drop(columns=cols_to_drop, errors="ignore").copy()
+
+        # Limpieza básica
+        features_df = features_df.fillna(0)
+        features_df = features_df.replace([np.inf, -np.inf], 0)
+
+        print(
+            f"📈 Features generados (incluyendo fecha y target): "
+            f"{features_df.shape[1]} columnas"
+        )
+
+        if use_feature_selection:
+            exclude_cols = [target_col, "purchase_year_month"]
+            candidate_cols = [c for c in features_df.columns if c not in exclude_cols]
+
+            numeric_candidate_cols = [
+                c
+                for c in candidate_cols
+                if pd.api.types.is_numeric_dtype(features_df[c])
+            ]
+
+            if len(numeric_candidate_cols) > 10:
+                print("🔍 Aplicando selección de features con XGBoost (top_k=99)...")
+
+                selector_df_cols = [
+                    c
+                    for c in numeric_candidate_cols + [target_col]
+                    if c in features_df.columns
+                ]
+
+                selected_features = self.select_best_features(
+                    features_df[selector_df_cols],
+                    target_col=target_col,
+                    top_k=99,
+                )
+
+                base_cols = []
+                if "purchase_year_month" in features_df.columns:
+                    base_cols.append("purchase_year_month")
+                if target_col in features_df.columns:
+                    base_cols.append(target_col)
+
+                final_cols = selected_features + base_cols
+                final_cols = [c for c in final_cols if c in features_df.columns]
+
+                features_df = features_df[final_cols].copy()
+                print(f"✅ Features después de selección: {features_df.shape}")
+            else:
+                print(
+                    "ℹ️ Muy pocas columnas para selección de features. Se mantienen todas."
+                )
+
+        return features_df
+
+    # ------------------------------------------------------------------
+    # 4. SELECCIÓN DE FEATURES CON XGBOOST IMPORTANCE (SOLO NUMÉRICAS)
+    # ------------------------------------------------------------------
+    def select_best_features(
+        self,
+        features_df: pd.DataFrame,
+        target_col: str = "demand_next_month",
+        top_k: int = 99,
+    ):
+        """
+        Selecciona las top_k features según importancia de XGBoost.
+        Solo usa columnas numéricas (int, float, bool).
+        """
+        print("🎯 Seleccionando mejores features con XGBoost...")
+
+        if target_col not in features_df.columns:
+            raise ValueError(
+                f"❌ La columna target '{target_col}' no está en el DataFrame."
+            )
+
+        exclude_cols = [target_col, "purchase_year_month", "product_category_name"]
+
+        all_feature_cols = [col for col in features_df.columns if col not in exclude_cols]
+
+        numeric_feature_cols = features_df[all_feature_cols].select_dtypes(
+            include=[np.number, "bool"]
+        ).columns.tolist()
+
+        if not numeric_feature_cols:
+            raise ValueError("❌ No hay columnas numéricas disponibles para XGBoost.")
+
+        X = features_df[numeric_feature_cols].copy()
+        y = features_df[target_col].copy()
+
+        X = X.dropna(axis=1, how="all").fillna(0)
         X = X.replace([np.inf, -np.inf], 0)
-        
-        # Usar hiperparámetros optimizados para la selección
-        selector = XGBRegressor(
+
+        model = XGBRegressor(
             n_estimators=294,
             max_depth=10,
             learning_rate=0.0348,
@@ -407,53 +680,27 @@ class FeatureEngineer:
             reg_alpha=0.0882,
             reg_lambda=0.0257,
             random_state=42,
-            importance_type='weight'
+            importance_type="weight",
+            n_jobs=-1,
         )
-        
-        selector.fit(X, y)
-        
-        # Seleccionar features con importancia > threshold
-        feature_selector = SelectFromModel(selector, threshold=threshold, prefit=True)
-        selected_features = X.columns[feature_selector.get_support()]
-        
-        print(f"📊 Features originales: {len(X.columns)}")
-        print(f"🎯 Features seleccionados: {len(selected_features)}")
-        
-        # Mostrar importancia de features
-        feature_importance = pd.DataFrame({
-            'feature': X.columns,
-            'importance': selector.feature_importances_
-        }).sort_values('importance', ascending=False)
-        
+
+        model.fit(X, y)
+
+        importances = model.feature_importances_
+        fi = (
+            pd.DataFrame({"feature": X.columns, "importance": importances})
+            .sort_values("importance", ascending=False)
+        )
+
+        top_k = min(top_k, len(fi))
+        selected_features = fi["feature"].head(top_k).tolist()
+
+        print(f"📊 Features originales (numéricas): {len(X.columns)}")
+        print(f"🎯 Features seleccionados (top_k={top_k}): {len(selected_features)}")
+
         print("\n🏆 TOP 20 FEATURES POR IMPORTANCIA:")
-        for i, row in feature_importance.head(20).iterrows():
+        for i, row in fi.head(20).iterrows():
             print(f"  {i+1:2d}. {row['feature']:35} → {row['importance']:.8f}")
-        
+
         self.best_features = selected_features
         return selected_features
-    
-    def prepare_model_features(self, df, use_feature_selection=True):
-        """Preparar features finales para el modelo"""
-        print("📊 Preparando features para el modelo...")
-        
-        # Eliminar columnas no necesarias
-        features_to_drop = ['purchase_year_month', 'product_category_name']
-        features_df = df.drop(columns=features_to_drop, errors='ignore')
-        
-        # Manejar valores nulos
-        features_df = features_df.fillna(0)
-        
-        # Reemplazar infinitos
-        features_df = features_df.replace([np.inf, -np.inf], 0)
-        
-        print(f"📈 Features generados: {features_df.shape[1]} columnas")
-        
-        # Selección de features si está habilitada
-        if use_feature_selection and len(features_df.columns) > 50:
-            print("🔍 Aplicando selección de features...")
-            selected_features = self.select_best_features(features_df)
-            if len(selected_features) > 0:
-                features_df = features_df[selected_features.tolist() + ['demand_next_month']]
-                print(f"✅ Features después de selección: {features_df.shape}")
-        
-        return features_df

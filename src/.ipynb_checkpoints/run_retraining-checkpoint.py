@@ -1,14 +1,12 @@
-
 import argparse
 import sys
 import os
 import pandas as pd
 
 # ============================================================
-# CORRECCIÓN DE IMPORTS - USANDO IMPORT RELATIVOS
+# IMPORTS
 # ============================================================
 
-# Agregar el directorio padre al path para imports absolutos
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
@@ -16,19 +14,17 @@ try:
     from data_loader import DataLoader
     from feature_engineer import FeatureEngineer
     from model_trainer import ModelTrainer
-    print("✅ Todos los módulos importados correctamente")
 except ImportError as e:
     print(f"❌ Error importando módulos: {e}")
-    print("💡 Asegúrate de ejecutar desde la raíz del proyecto: python src/run_retraining.py")
     sys.exit(1)
 
 
 # ============================================================
-# FUNCIONES AUXILIARES PARA MÉTRICAS ORDENADAS
+# FUNCIONES AUXILIARES
 # ============================================================
 
 def print_metrics_ordered(metrics_dict, title):
-    """Imprime métricas en orden consistente y formateado"""
+    """Imprime métricas en orden consistente"""
     print(f"\n{title}:")
     print("-" * 50)
     print(f"  • MAE:  {metrics_dict['MAE']:>10.2f}")
@@ -38,38 +34,24 @@ def print_metrics_ordered(metrics_dict, title):
     print(f"  • MASE: {metrics_dict['MASE']:>10.4f}")
 
 
-def print_training_comparison(train_metrics, test_metrics):
-    """Muestra comparación entre train y test"""
-    print("\n🔍 COMPARACIÓN ENTRENAMIENTO vs TEST:")
-    print("-" * 50)
-    
-    # Calcular diferencias
-    r2_gap = train_metrics['R²'] - test_metrics['R²']
-    mae_gap = test_metrics['MAE'] - train_metrics['MAE']
-    mape_gap = test_metrics['MAPE'] - train_metrics['MAPE']
-    
-    print(f"  📈 Diferencia R²:     {r2_gap:>10.4f}")
-    print(f"  📊 Diferencia MAE:    {mae_gap:>10.2f}")
-    print(f"  📉 Diferencia MAPE:   {mape_gap:>10.2f}%")
-    
-    # Análisis de sobreajuste
-    if r2_gap > 0.1:
-        print("  ⚠️  ALERTA: Posible sobreajuste detectado")
-    else:
-        print("  ✅ Buen equilibrio entre train y test")
+def crear_target_manual(monthly_data):
+    """Crear target manualmente si es necesario"""
+    if 'product_category_name' in monthly_data.columns and 'purchase_year_month' in monthly_data.columns:
+        monthly_data = monthly_data.sort_values(['product_category_name', 'purchase_year_month'])
+        monthly_data['demand_next_month'] = monthly_data.groupby('product_category_name')['demand'].shift(-1)
+        monthly_data = monthly_data.dropna(subset=['demand_next_month'])
+    return monthly_data
 
 
 # ============================================================
-# FUNCIONES PRINCIPALES DE REENTRENAMIENTO
+# REENTRENAMIENTO INCREMENTAL
 # ============================================================
 
 def run_incremental_retraining():
     """Ejecutar reentrenamiento incremental con datos nuevos."""
     print("\n🎯 INICIANDO REENTRENAMIENTO INCREMENTAL")
 
-    # --------------------------------------------------------
-    # 1. ACTUALIZAR DATOS
-    # --------------------------------------------------------
+    # PASO 1: ACTUALIZAR DATOS
     print("\n" + "=" * 60)
     print("📥 PASO 1: ACTUALIZACIÓN DE DATOS")
     print("=" * 60)
@@ -77,15 +59,13 @@ def run_incremental_retraining():
     try:
         updated = ejecutar_actualizacion_mensual()
         if not updated:
-            print("❌ ERROR: No se pudieron actualizar los datos. Cancelando.")
+            print("❌ No se pudieron actualizar los datos")
             return False
     except Exception as e:
-        print(f"❌ ERROR en actualización de datos: {e}")
+        print(f"❌ Error en actualización: {e}")
         return False
 
-    # --------------------------------------------------------
-    # 2. CARGAR DATOS PROCESADOS
-    # --------------------------------------------------------
+    # PASO 2: CARGAR DATOS
     print("\n" + "=" * 60)
     print("📊 PASO 2: CARGA DE DATOS ACTUALIZADOS")
     print("=" * 60)
@@ -94,40 +74,43 @@ def run_incremental_retraining():
     df = data_loader.load_processed_data()
 
     if df is None or df.empty:
-        print("❌ ERROR: Datos procesados no disponibles o vacíos.")
+        print("❌ Datos procesados no disponibles")
         return False
 
-    print(f"   ✔ Datos cargados: {df.shape}")
+    print(f"   Shape: {df.shape}")
 
-    # --------------------------------------------------------
-    # 3. FEATURE ENGINEERING
-    # --------------------------------------------------------
+    # PASO 3: FEATURE ENGINEERING
     print("\n" + "=" * 60)
     print("🔧 PASO 3: FEATURE ENGINEERING")
     print("=" * 60)
 
     feature_engineer = FeatureEngineer()
+    TARGET = 'demand_next_month'
 
     try:
+        print("Creando variable target...")
         monthly_data = feature_engineer.create_target_variable(df)
+        
+        # Verificar y crear target si es necesario
+        if TARGET not in monthly_data.columns:
+            monthly_data = crear_target_manual(monthly_data)
+
         features_data = feature_engineer.create_advanced_features(monthly_data)
         final_features = feature_engineer.prepare_model_features(features_data)
 
+        if final_features is None or final_features.empty:
+            print("❌ No se generaron features válidos")
+            return False
+
+        print(f"=== MASTER FINAL ===\nShape: {final_features.shape}")
+
     except Exception as e:
-        print(f"❌ ERROR en feature engineering: {e}")
+        print(f"❌ Error en feature engineering: {e}")
         return False
 
-    if final_features is None or final_features.empty:
-        print("❌ ERROR: No se generaron features válidos.")
-        return False
-
-    print(f"   ✔ Features generados: {final_features.shape}")
-
-    # --------------------------------------------------------
-    # 4. REENTRENAMIENTO DEL MODELO
-    # --------------------------------------------------------
+    # PASO 4: ENTRENAMIENTO DEL MODELO
     print("\n" + "=" * 60)
-    print("🧠 PASO 4: REENTRENAMIENTO DEL MODELO")
+    print("🧠 PASO 4: ENTRENAMIENTO DEL MODELO")
     print("=" * 60)
 
     model_trainer = ModelTrainer()
@@ -136,24 +119,25 @@ def run_incremental_retraining():
         model, train_metrics, test_metrics, model_path = model_trainer.train_best_model(final_features)
 
         if model is None:
-            print("❌ FAIL: train_best_model no devolvió un modelo válido.")
+            print("❌ No se pudo entrenar el modelo")
             return False
 
-        # ============================================================
-        # MÉTRICAS ORDENADAS - PARTE ACTUALIZADA
-        # ============================================================
-        print("\n" + "🎉" * 20)
-        print("🎉 ¡REENTRENAMIENTO INCREMENTAL COMPLETADO EXITOSAMENTE!")
-        print("🎉" * 20)
+        # RESULTADOS FINALES
+     
+        print("🎉 ¡REENTRENAMIENTO COMPLETADO EXITOSAMENTE!")
+      
         
         print(f"\n📁 Modelo guardado en: {model_path}")
         
-        # Mostrar métricas ordenadas
         print_metrics_ordered(train_metrics, "📈 MÉTRICAS DE ENTRENAMIENTO")
         print_metrics_ordered(test_metrics, "📊 MÉTRICAS DE TEST")
         
-        # Mostrar comparación
-        print_training_comparison(train_metrics, test_metrics)
+        # Análisis de sobreajuste
+        r2_gap = train_metrics['R²'] - test_metrics['R²']
+        if r2_gap > 0.1:
+            print("\n⚠️  ALERTA: Posible sobreajuste detectado")
+        else:
+            print("\n✅ Buen equilibrio entre train y test")
         
         print("\n" + "=" * 60)
         print("✅ PROCESO INCREMENTAL FINALIZADO")
@@ -162,7 +146,7 @@ def run_incremental_retraining():
         return True
 
     except Exception as e:
-        print(f"❌ ERROR en reentrenamiento incremental: {e}")
+        print(f"❌ Error en entrenamiento: {e}")
         return False
 
 
@@ -174,9 +158,7 @@ def run_full_retraining():
     """Reentrenar desde cero cargando todos los datos RAW."""
     print("\n🎯 INICIANDO REENTRENAMIENTO COMPLETO")
 
-    # --------------------------------------------------------
-    # 1. CARGA Y PROCESAMIENTO COMPLETO
-    # --------------------------------------------------------
+    # PASO 1: CARGA COMPLETA
     print("\n" + "=" * 60)
     print("📊 PASO 1: CARGA Y LIMPIEZA COMPLETA")
     print("=" * 60)
@@ -187,16 +169,12 @@ def run_full_retraining():
         orders, items, products, reviews, payments = data_loader.load_raw_data()
         df = data_loader.clean_data(orders, items, products, reviews, payments)
         data_loader.save_processed_data(df)
-
+        print(f"   Shape: {df.shape}")
     except Exception as e:
-        print(f"❌ ERROR en carga/procesamiento desde cero: {e}")
+        print(f"❌ Error en carga: {e}")
         return False
 
-    print(f"   ✔ Dataset procesado: {df.shape}")
-
-    # --------------------------------------------------------
-    # 2. FEATURE ENGINEERING
-    # --------------------------------------------------------
+    # PASO 2: FEATURE ENGINEERING
     print("\n" + "=" * 60)
     print("🔧 PASO 2: FEATURE ENGINEERING")
     print("=" * 60)
@@ -204,25 +182,24 @@ def run_full_retraining():
     feature_engineer = FeatureEngineer()
 
     try:
+        print("Creando variable target...")
         monthly_data = feature_engineer.create_target_variable(df)
         features_data = feature_engineer.create_advanced_features(monthly_data)
         final_features = feature_engineer.prepare_model_features(features_data)
 
+        if final_features is None or final_features.empty:
+            print("❌ No se generaron features válidos")
+            return False
+
+        print(f"=== MASTER FINAL ===\nShape: {final_features.shape}")
+
     except Exception as e:
-        print(f"❌ ERROR en feature engineering: {e}")
+        print(f"❌ Error en feature engineering: {e}")
         return False
 
-    if final_features is None or final_features.empty:
-        print("❌ ERROR: No se generaron features válidos.")
-        return False
-
-    print(f"   ✔ Features generados: {final_features.shape}")
-
-    # --------------------------------------------------------
-    # 3. REENTRENAR MODELO COMPLETO
-    # --------------------------------------------------------
+    # PASO 3: ENTRENAMIENTO
     print("\n" + "=" * 60)
-    print("🧠 PASO 3: REENTRENAMIENTO COMPLETO DEL MODELO")
+    print("🧠 PASO 3: ENTRENAMIENTO COMPLETO DEL MODELO")
     print("=" * 60)
 
     model_trainer = ModelTrainer()
@@ -231,24 +208,18 @@ def run_full_retraining():
         model, train_metrics, test_metrics, model_path = model_trainer.train_best_model(final_features)
 
         if model is None:
-            print("❌ FAIL: train_best_model no devolvió un modelo válido.")
+            print("❌ No se pudo entrenar el modelo")
             return False
 
-        # ============================================================
-        # MÉTRICAS ORDENADAS - PARTE ACTUALIZADA
-        # ============================================================
+        # RESULTADOS FINALES
         print("\n" + "🎉" * 20)
         print("🎉 ¡REENTRENAMIENTO COMPLETO EXITOSO!")
         print("🎉" * 20)
         
         print(f"\n📁 Modelo guardado en: {model_path}")
         
-        # Mostrar métricas ordenadas
         print_metrics_ordered(train_metrics, "📈 MÉTRICAS DE ENTRENAMIENTO")
         print_metrics_ordered(test_metrics, "📊 MÉTRICAS DE TEST")
-        
-        # Mostrar comparación
-        print_training_comparison(train_metrics, test_metrics)
         
         print("\n" + "=" * 60)
         print("✅ PROCESO COMPLETO FINALIZADO")
@@ -257,12 +228,12 @@ def run_full_retraining():
         return True
 
     except Exception as e:
-        print(f"❌ ERROR en reentrenamiento completo: {e}")
+        print(f"❌ Error en entrenamiento: {e}")
         return False
 
 
 # ============================================================
-# MAIN CLI
+# MAIN
 # ============================================================
 
 def main():
@@ -296,5 +267,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

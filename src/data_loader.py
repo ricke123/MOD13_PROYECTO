@@ -1,6 +1,3 @@
-"""
-Módulo para carga y limpieza de datos - VERSIÓN CORREGIDA
-"""
 import pandas as pd
 from src.config import DATA_FILES, DATE_COLS, DATA_PROCESSED
 
@@ -82,7 +79,7 @@ class DataLoader:
             
             return df
         else:
-            print("❌ No se encontraron datos procesados")
+            ## print("❌ No se encontraron datos procesados")
             return None
     
     def save_processed_data(self, df):

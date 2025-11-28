@@ -40,7 +40,7 @@ def run_pipeline(use_corr_features: bool = False):
         processed_data = loader.load_processed_data()
 
         if processed_data is None:
-            print("📂 No hay datos procesados. Cargando datos RAW...")
+            ##print("📂 No hay datos procesados. Cargando datos RAW...")
             orders, items, products, reviews, payments = loader.load_raw_data()
             df_clean = loader.clean_data(orders, items, products, reviews, payments)
             loader.save_processed_data(df_clean)

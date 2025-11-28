@@ -1,13 +1,7 @@
-"""
-Módulo para actualización mensual de datos - VERSIÓN MEJORADA
-- Combina datos base + nuevos por tabla (orders, items, etc.)
-- Reutiliza rutas y archivos desde config.py
-- Usa DataLoader para aplicar la misma limpieza que el pipeline principal
-"""
-
 import glob
 from pathlib import Path
 import pandas as pd
+import numpy as np
 
 from src.config import DATA_RAW, DATA_PROCESSED, DATA_FILES
 from src.data_loader import DataLoader
@@ -15,117 +9,133 @@ from src.data_loader import DataLoader
 
 class DataUpdater:
     """
-    Clase encargada de:
-    - Detectar archivos nuevos en data/raw/nuevos/
-    - Combinar datos base + nuevos por tipo de tabla
-    - Pasar todo por el mismo proceso de limpieza de DataLoader
+    Clase para actualización mensual de datos
     """
 
     def __init__(self) -> None:
-        # Usamos las rutas globales definidas en config.py
-        self.raw_path = DATA_RAW              # data/raw/
+        self.raw_path = DATA_RAW
         self.nuevos_path = self.raw_path / "nuevos"
-        self.processed_path = DATA_PROCESSED  # data/processed/
+        self.processed_path = DATA_PROCESSED
 
-        # Mapeo de tipos de tablas a sus archivos base (rutas completas)
         self.tipos_tablas = {
-            'orders':   DATA_FILES['orders'],
-            'items':    DATA_FILES['items'],
+            'orders': DATA_FILES['orders'],
+            'items': DATA_FILES['items'],
             'products': DATA_FILES['products'],
-            'reviews':  DATA_FILES['reviews'],
+            'reviews': DATA_FILES['reviews'],
             'payments': DATA_FILES['payments'],
         }
 
-    # ------------------------------------------------------------------
-    # UTILIDAD: listar archivos nuevos por tipo
-    # ------------------------------------------------------------------
     def _listar_archivos_nuevos_por_tipo(self, tipo: str) -> list[Path]:
-        """
-        Lista archivos nuevos para un tipo dado (orders, items, etc.)
-        Convención: data/raw/nuevos/nuevos_<loquesea><tipo><loquesea>.csv
-        Ejemplo: nuevos_orders_2025_08.csv
-        """
+        """Listar archivos nuevos para un tipo dado"""
         patron = str(self.nuevos_path / f"nuevos_*{tipo}*.csv")
-        rutas = [Path(p) for p in glob.glob(patron)]
-        return rutas
+        return [Path(p) for p in glob.glob(patron)]
 
-    # ------------------------------------------------------------------
-    # Cargar y combinar tablas base + nuevas
-    # ------------------------------------------------------------------
+    def _limpiar_y_validar_datos_nuevos(self, df: pd.DataFrame, tipo: str) -> pd.DataFrame:
+        """Limpiar y validar datos nuevos antes de combinarlos"""
+        df_limpio = df.copy()
+        
+        try:
+            # SOLO ORDERS se filtran por fecha
+            if tipo == 'orders':
+                # Convertir columnas de fecha
+                date_columns = [col for col in df_limpio.columns if 'date' in col.lower() or 'timestamp' in col.lower()]
+                for col in date_columns:
+                    df_limpio[col] = pd.to_datetime(df_limpio[col], errors='coerce')
+                
+                # Filtrar solo órdenes de octubre 2018
+                if 'order_purchase_timestamp' in df_limpio.columns:
+                    mask_oct_2018 = (
+                        (df_limpio['order_purchase_timestamp'].dt.year == 2018) & 
+                        (df_limpio['order_purchase_timestamp'].dt.month == 10)
+                    )
+                    df_limpio = df_limpio[mask_oct_2018]
+            
+            # ITEMS - Solo convertir fechas, NO filtrar
+            elif tipo == 'items':
+                if 'shipping_limit_date' in df_limpio.columns:
+                    df_limpio['shipping_limit_date'] = pd.to_datetime(df_limpio['shipping_limit_date'], errors='coerce')
+            
+            # REVIEWS - Solo convertir fechas, NO filtrar
+            elif tipo == 'reviews':
+                if 'review_creation_date' in df_limpio.columns:
+                    df_limpio['review_creation_date'] = pd.to_datetime(df_limpio['review_creation_date'], errors='coerce')
+            
+            # Eliminar filas con fechas inválidas
+            date_columns = [col for col in df_limpio.columns if pd.api.types.is_datetime64_any_dtype(df_limpio[col])]
+            for col in date_columns:
+                df_limpio = df_limpio[df_limpio[col].notna()]
+            
+            # Manejar tipos numéricos
+            numeric_columns = [col for col in df_limpio.columns if 'price' in col.lower() or 'value' in col.lower() or 'payment' in col.lower()]
+            for col in numeric_columns:
+                if col in df_limpio.columns:
+                    df_limpio[col] = pd.to_numeric(df_limpio[col], errors='coerce')
+                    
+        except Exception:
+            return df.copy()
+        
+        return df_limpio
+
     def cargar_y_combinar_tablas(self) -> dict[str, pd.DataFrame]:
-        """
-        Cargar y combinar todas las tablas relevantes:
-        - orders, items, products, reviews, payments
-        Devuelve un diccionario {tipo: DataFrame}
-        """
+        """Cargar y combinar todas las tablas relevantes"""
         print("🔄 Cargando y combinando todas las tablas...")
 
-        datos_combinados: dict[str, pd.DataFrame] = {}
+        datos_combinados = {}
 
         for tipo, ruta_base in self.tipos_tablas.items():
-            print(f"\n📊 Procesando: {tipo}")
+            print(f"Procesando: {tipo}")
 
             # 1. Cargar datos BASE
             df_base = pd.DataFrame()
             if ruta_base.exists():
                 try:
                     df_base = pd.read_csv(ruta_base)
-                    print(f"   📁 Base: {ruta_base.name} - {len(df_base)} registros")
-                except Exception as e:
-                    print(f"   ❌ Error cargando base {ruta_base.name}: {e}")
-            else:
-                print(f"   ⚠️ No se encontró archivo base: {ruta_base}")
+                except Exception:
+                    continue
 
             # 2. Cargar datos NUEVOS
             archivos_nuevos = self._listar_archivos_nuevos_por_tipo(tipo)
-            datos_nuevos: list[pd.DataFrame] = []
+            datos_nuevos = []
 
             if archivos_nuevos:
                 for archivo in archivos_nuevos:
                     try:
+                        print(f"Cargando: {archivo.name}")
                         df_nuevo = pd.read_csv(archivo)
-                        datos_nuevos.append(df_nuevo)
-                        print(f"   🆕 Nuevo: {archivo.name} - {len(df_nuevo)} registros")
-                    except Exception as e:
-                        print(f"   ❌ Error cargando nuevo archivo {archivo.name}: {e}")
-            else:
-                print("   📭 No se encontraron archivos nuevos para este tipo")
+                        df_nuevo_limpio = self._limpiar_y_validar_datos_nuevos(df_nuevo, tipo)
+                        if len(df_nuevo_limpio) > 0:
+                            datos_nuevos.append(df_nuevo_limpio)
+                    except Exception:
+                        continue
 
             # 3. Combinar base + nuevos
-            todos_datos: list[pd.DataFrame] = []
+            todos_datos = []
             if not df_base.empty:
                 todos_datos.append(df_base)
             todos_datos.extend(datos_nuevos)
 
             if todos_datos:
                 try:
-                    df_final = pd.concat(todos_datos, ignore_index=True)
+                    df_final = pd.concat(todos_datos, ignore_index=True, sort=False)
+                    
+                    # Eliminar duplicados
+                    if tipo == 'orders' and 'order_id' in df_final.columns:
+                        df_final = df_final.drop_duplicates(subset=['order_id'])
+                    elif tipo == 'items' and 'order_id' in df_final.columns and 'product_id' in df_final.columns:
+                        df_final = df_final.drop_duplicates(subset=['order_id', 'product_id'])
+                    
                     datos_combinados[tipo] = df_final
-                    print(f"   ✅ {tipo}: {len(df_final)} registros totales")
-                except Exception as e:
-                    print(f"   ❌ Error combinando datos para {tipo}: {e}")
+                    print(f"✅ {tipo}: {len(df_final)} registros")
+                    
+                except Exception:
                     if not df_base.empty:
                         datos_combinados[tipo] = df_base
-                        print(f"   ⚠️ Usando solo datos base para {tipo}")
-                    else:
-                        print(f"   💥 No hay datos disponibles para {tipo}")
-            else:
-                print(f"   ❌ No se encontraron datos para {tipo}")
 
         return datos_combinados
 
-    # ------------------------------------------------------------------
-    # Ejecutar procesamiento completo (limpieza con DataLoader)
-    # ------------------------------------------------------------------
     def procesar_datos_completos(self) -> pd.DataFrame | None:
-        """
-        Ejecuta el pipeline de:
-        - Cargar + combinar tablas base + nuevas
-        - Limpiar con DataLoader (filtro delivered + merges)
-        - Guardar processed_data.csv en data/processed/
-        Devuelve el DataFrame limpio o None si algo falla.
-        """
-        print("\n🚀 Iniciando procesamiento completo de datos...")
+        """Ejecutar pipeline completo de procesamiento"""
+        print("🚀 Iniciando procesamiento completo de datos...")
 
         tablas = self.cargar_y_combinar_tablas()
 
@@ -133,13 +143,13 @@ class DataUpdater:
         tablas_faltantes = [t for t in tablas_requeridas if t not in tablas]
 
         if tablas_faltantes:
-            print(f"💥 No se pueden procesar los datos. Tablas faltantes: {tablas_faltantes}")
+            print(f"❌ Tablas faltantes: {tablas_faltantes}")
             return None
 
         try:
             data_loader = DataLoader()
 
-            print("🧹 Realizando limpieza de datos (DataLoader.clean_data)...")
+            print("🧹 Realizando limpieza de datos...")
             df_limpio = data_loader.clean_data(
                 tablas['orders'],
                 tablas['items'],
@@ -151,71 +161,43 @@ class DataUpdater:
             data_loader.save_processed_data(df_limpio)
 
             print("✅ Procesamiento completo terminado")
-            print(f"📊 Dataset limpio unificado: {df_limpio.shape}")
+            print(f"📊 Dataset final: {df_limpio.shape}")
 
             return df_limpio
 
         except Exception as e:
-            print(f"❌ Error en el procesamiento de datos: {e}")
+            print(f"❌ Error en procesamiento: {e}")
             return None
 
-    # ------------------------------------------------------------------
-    # Verificar si hay nuevos datos en data/raw/nuevos
-    # ------------------------------------------------------------------
     def verificar_nuevos_datos(self) -> bool:
-        """
-        Verifica si existen archivos nuevos en data/raw/nuevos/.
-        Devuelve True si hay al menos un archivo nuevos_*.csv
-        """
+        """Verificar si existen archivos nuevos"""
         patron = str(self.nuevos_path / "nuevos_*.csv")
         archivos_nuevos = [Path(p) for p in glob.glob(patron)]
 
         if archivos_nuevos:
-            print(f"📥 Se encontraron {len(archivos_nuevos)} archivos nuevos:")
-            for archivo in archivos_nuevos:
-                try:
-                    df = pd.read_csv(archivo, nrows=1)
-                    print(f"   📄 {archivo.name} - Columnas: {len(df.columns)}")
-                except Exception as e:
-                    print(f"   ❌ {archivo.name} - Error al leer: {e}")
+            print(f"📥 Archivos nuevos encontrados: {len(archivos_nuevos)}")
             return True
         else:
-            print("📭 No se encontraron archivos nuevos en data/raw/nuevos/")
-            print("💡 Convención sugerida: nuevos_orders_YYYY_MM.csv, nuevos_items_YYYY_MM.csv, etc.")
+            print("📭 No se encontraron archivos nuevos")
             return False
 
-    # ------------------------------------------------------------------
-    # Info rápida de datos combinados (debug)
-    # ------------------------------------------------------------------
     def obtener_info_datos_combinados(self) -> dict[str, pd.DataFrame]:
-        """
-        Carga y combina tablas, e imprime un resumen rápido por tipo.
-        Devuelve el diccionario {tipo: DataFrame}
-        """
+        """Información de datos combinados"""
         tablas = self.cargar_y_combinar_tablas()
 
-        print("\n📊 INFORMACIÓN DE DATOS COMBINADOS")
-        print("=" * 50)
+        print("\n📊 RESUMEN DATOS COMBINADOS")
+        print("=" * 40)
         for tipo, df in tablas.items():
-            print(f"   {tipo:10}: {len(df):6} registros, {len(df.columns):3} columnas")
-        print("=" * 50)
+            print(f"   {tipo:10}: {len(df):6} registros")
+        print("=" * 40)
 
         return tablas
 
 
-# ----------------------------------------------------------------------
-# Función de conveniencia para lanzar la actualización mensual
-# ----------------------------------------------------------------------
 def ejecutar_actualizacion_mensual() -> bool:
-    """
-    Ejecuta el flujo completo de actualización mensual:
-    - Verifica si hay nuevos datos
-    - Muestra info combinada (debug)
-    - Ejecuta el procesamiento completo con DataLoader
-    Devuelve True si todo va bien, False si no.
-    """
+    """Ejecutar flujo completo de actualización mensual"""
     print("=" * 60)
-    print("🔄 EJECUTANDO ACTUALIZACIÓN MENSUAL DE DATOS")
+    print("🔄 EJECUTANDO ACTUALIZACIÓN MENSUAL")
     print("=" * 60)
 
     updater = DataUpdater()
@@ -231,22 +213,12 @@ def ejecutar_actualizacion_mensual() -> bool:
         df_actualizado = updater.procesar_datos_completos()
 
         if df_actualizado is not None:
-            print("✅ ¡Actualización mensual completada exitosamente!")
+            print("✅ ¡Actualización completada exitosamente!")
             return True
         else:
-            print("❌ Error en el procesamiento de datos")
+            print("❌ Error en el procesamiento")
             return False
 
     except Exception as e:
-        print(f"❌ Error en la actualización: {e}")
-        import traceback
-        print("📝 Detalles del error:")
-        traceback.print_exc()
+        print(f"❌ Error en actualización: {e}")
         return False
-
-
-
-
-
-
-
