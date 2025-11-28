@@ -1,0 +1,14 @@
+{
+  "created": "2025-11-26T14:02:56.922332",
+  "last_retraining": "2025-11-26T14:02:56.922158",
+  "retraining_history": [
+    {
+      "last_retraining": "2025-11-26T14:02:56.922158",
+      "incremental": true,
+      "dataset_size": 1179,
+      "performance_r2": 0.922023012994204,
+      "performance_mae": 21.928441653312262,
+      "features_count": 151
+    }
+  ]
+}

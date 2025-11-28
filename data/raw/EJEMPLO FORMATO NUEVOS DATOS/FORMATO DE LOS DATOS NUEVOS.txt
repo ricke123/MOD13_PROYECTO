@@ -1,0 +1,7 @@
+
+nuevos_orders_2024_01.csv  
+nuevos_items_2024_01.csv 
+nuevos_products_2024_01.csv 
+nuevos_reviews_2024_01.csv 
+nuevos_payments_2024_01.csv 
+

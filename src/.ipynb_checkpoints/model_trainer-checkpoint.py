@@ -1,164 +1,253 @@
-# src/model_trainer.py
+"""
+Módulo para entrenamiento de modelos - CONFIGURACIÓN EXACTA DEL EDA
+"""
 import pandas as pd
 import numpy as np
-import joblib
+import pickle
+import xgboost as xgb
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split, TimeSeriesSplit
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 import warnings
 warnings.filterwarnings('ignore')
 
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from datetime import datetime
-from config import Config
-
-# Intentar importar xgboost, si no está disponible usar alternativa
-try:
-    import xgboost as xgb
-    XGB_AVAILABLE = True
-    print("✅ XGBoost disponible")
-except ImportError:
-    XGB_AVAILABLE = False
-    print("⚠️ XGBoost no disponible, usando alternativas")
+from config import MODEL_CONFIG, MODEL_DIR, TIME_PERIODS
 
 class ModelTrainer:
     def __init__(self):
-        self.models = {}
-        self.metrics = {}
-        
-    def load_training_data(self):
-        """Carga el dataset para entrenamiento"""
-        try:
-            file_path = Config.get_output_path('TABLA_FINAL_MODULAR.csv')
-            df = pd.read_csv(file_path)
-            print(f"📊 Datos de entrenamiento cargados: {df.shape}")
-            return df
-        except Exception as e:
-            print(f"❌ Error cargando datos: {e}")
-            return None
+        self.config = MODEL_CONFIG
+        self.model_dir = MODEL_DIR
     
-    def prepare_features(self, df):
-        """Prepara features y target para entrenamiento"""
-        # Columnas a excluir
-        exclude_cols = ['order_month', 'product_category_name', 'date', 'month_year', 'demand_next_month']
+    def calculate_comprehensive_metrics(self, y_true, y_pred, y_train=None):
+        """Calcular métricas comprehensivas como en tu EDA"""
+        mae = mean_absolute_error(y_true, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+        r2 = r2_score(y_true, y_pred)
         
-        # Features (X) y target (y)
-        X = df.drop(columns=[col for col in exclude_cols if col in df.columns])
-        y = df['demand_next_month']
+        # MAPE
+        mape = np.mean(np.abs((y_true - y_pred) / np.where(y_true == 0, 1, y_true))) * 100
         
-        print(f"🔧 Features: {X.shape[1]}, Target: {y.shape[0]}")
-        return X, y
+        # MASE (Mean Absolute Scaled Error)
+        if y_train is not None:
+            naive_forecast_errors = np.abs(np.diff(y_train))
+            if len(naive_forecast_errors) > 0:
+                mean_naive_error = np.mean(naive_forecast_errors)
+                mase = mae / mean_naive_error if mean_naive_error != 0 else np.inf
+            else:
+                mase = np.inf
+        else:
+            mase = np.inf
+        
+        return {
+            'MAE': mae,
+            'RMSE': rmse, 
+            'R²': r2,
+            'MAPE': mape,
+            'MASE': mase
+        }
     
-    def train_models(self, X, y):
-        """Entrena múltiples modelos"""
-        print("🤖 Entrenando modelos...")
+    def prepare_temporal_data(self, features_df):
+      
+        print("PREPARANDO DATOS CON DIVICION TEMPORAL")
         
-        # Split temporal (último 20% para test)
-        split_idx = int(len(X) * 0.8)
-        X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+        # Convertir a datetime si es necesario
+        if 'purchase_year_month' in features_df.columns:
+            if not pd.api.types.is_datetime64_any_dtype(features_df['purchase_year_month']):
+                features_df['purchase_year_month'] = pd.to_datetime(features_df['purchase_year_month'].astype(str))
         
-        print(f"📈 Split: Train {X_train.shape}, Test {X_test.shape}")
+        # Definir períodos EXACTOS del EDA
+        train_start = '2016-09'
+        train_end = '2018-04'
+        test_start = '2018-05' 
+        test_end = '2018-07'
         
-        # 1. Random Forest (siempre disponible)
-        print("🌲 Entrenando Random Forest...")
-        rf_model = RandomForestRegressor(
-            n_estimators=50,  # Reducido para pruebas rápidas
-            max_depth=10,
+        print(f"📅 Período entrenamiento: {train_start} a {train_end}")
+        print(f"📅 Período prueba: {test_start} a {test_end}")
+        
+        # Filtrar datos por período
+        if 'purchase_year_month' in features_df.columns:
+            train_mask = (features_df['purchase_year_month'] >= train_start) & (features_df['purchase_year_month'] <= train_end)
+            test_mask = (features_df['purchase_year_month'] >= test_start) & (features_df['purchase_year_month'] <= test_end)
+            
+            train_data = features_df[train_mask].copy()
+            test_data = features_df[test_mask].copy()
+            
+            print(f"📊 Train shape: {train_data.shape}")
+            print(f"📊 Test shape: {test_data.shape}")
+            
+            # Separar features y target
+            X_train = train_data.drop(columns=[self.config['target_col'], 'purchase_year_month'], errors='ignore')
+            X_test = test_data.drop(columns=[self.config['target_col'], 'purchase_year_month'], errors='ignore')
+            y_train = train_data[self.config['target_col']]
+            y_test = test_data[self.config['target_col']]
+            
+        else:
+            # Fallback a división aleatoria si no hay fecha
+            X = features_df.drop(columns=[self.config['target_col']])
+            y = features_df[self.config['target_col']]
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, 
+                test_size=self.config['test_size'],
+                random_state=self.config['random_state']
+            )
+        
+        return X_train, X_test, y_train, y_test
+    
+    def train_optimized_xgboost(self, X_train, X_test, y_train, y_test):
+        """Entrenar XGBoost con configuración EXACTA del EDA"""
+        print("🧠 Entrenando modelo XGBoost optimizado (configuración EDA)...")
+        
+        # HIPERPARÁMETROS OPTIMIZADOS EXACTOS del EDA
+        best_params = {
+            'colsample_bylevel': 0.6072,
+            'colsample_bytree': 0.7976,
+            'gamma': 0.1788,
+            'learning_rate': 0.0348,
+            'max_depth': 10,
+            'min_child_weight': 7,
+            'n_estimators': 294,
+            'reg_alpha': 0.0882,
+            'reg_lambda': 0.0257,
+            'subsample': 0.6375
+        }
+        
+        # Configuración EXACTA del EDA
+        xgb_optimized = xgb.XGBRegressor(
+            **best_params,
             random_state=42,
+            n_jobs=-1,
+            tree_method='hist',
+            early_stopping_rounds=50,  
+            eval_metric='mae'           
+        )
+        
+        print("⚙️  HIPERPARÁMETROS OPTIMIZADOS (EDA):")
+        for param, value in best_params.items():
+            print(f"   • {param:20} : {value}")
+        
+        # Entrenar con early stopping EXACTO como en el EDA
+        xgb_optimized.fit(
+            X_train, 
+            y_train,
+            eval_set=[(X_test, y_test)], 
+            verbose=False
+        )
+        
+        # Predicciones
+        y_pred_optimized = xgb_optimized.predict(X_test)
+        
+        # Métricas COMPREHENSIVAS como en el EDA
+        metrics_optimized = self.calculate_comprehensive_metrics(y_test, y_pred_optimized, y_train)
+        
+        print(f"\n📊 RESULTADOS MODELO OPTIMIZADO (Test Set):")
+        print("="*80)
+        print(f"   • MAE:  {metrics_optimized['MAE']:>10,.2f}")
+        print(f"   • RMSE: {metrics_optimized['RMSE']:>10,.2f}")
+        print(f"   • R²:   {metrics_optimized['R²']:>10.4f}")
+        print(f"   • MAPE: {metrics_optimized['MAPE']:>10.2f}%")
+        print(f"   • MASE: {metrics_optimized['MASE']:>10.4f}")
+        print("="*80)
+        
+        # También mostrar métricas de entrenamiento para comparación
+        y_train_pred = xgb_optimized.predict(X_train)
+        train_metrics = self.calculate_comprehensive_metrics(y_train, y_train_pred, y_train)
+        
+        print(f"\n📊 RESULTADOS MODELO OPTIMIZADO (Train Set):")
+        print("="*80)
+        print(f"   • MAE:  {train_metrics['MAE']:>10,.2f}")
+        print(f"   • RMSE: {train_metrics['RMSE']:>10,.2f}")
+        print(f"   • R²:   {train_metrics['R²']:>10.4f}")
+        print(f"   • MAPE: {train_metrics['MAPE']:>10.2f}%")
+        print("="*80)
+        
+        return xgb_optimized, train_metrics, metrics_optimized
+    
+    def train_random_forest_model(self, X_train, X_test, y_train, y_test):
+        """Entrenar modelo Random Forest (backup)"""
+        print("🌲 Entrenando modelo Random Forest...")
+        
+        model = RandomForestRegressor(
+            n_estimators=200,
+            max_depth=15,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=self.config['random_state'],
             n_jobs=-1
         )
-        rf_model.fit(X_train, y_train)
-        self.models['random_forest'] = rf_model
         
-        # 2. Linear Regression (alternativa simple)
-        print("📐 Entrenando Linear Regression...")
-        lr_model = LinearRegression()
-        lr_model.fit(X_train, y_train)
-        self.models['linear_regression'] = lr_model
+        model.fit(X_train, y_train)
         
-        # 3. XGBoost solo si está disponible
-        if XGB_AVAILABLE:
-            print("🚀 Entrenando XGBoost...")
-            xgb_model = xgb.XGBRegressor(
-                n_estimators=50,
-                max_depth=8,
-                learning_rate=0.1,
-                random_state=42
-            )
-            xgb_model.fit(X_train, y_train)
-            self.models['xgboost'] = xgb_model
+        # Predicciones
+        y_pred = model.predict(X_test)
+        y_train_pred = model.predict(X_train)
+        
+        # Métricas
+        test_metrics = self.calculate_comprehensive_metrics(y_test, y_pred, y_train)
+        train_metrics = self.calculate_comprehensive_metrics(y_train, y_train_pred, y_train)
+        
+        print(f"\n📊 RESULTADOS RANDOM FOREST (Test Set):")
+        print("="*80)
+        print(f"   • MAE:  {test_metrics['MAE']:>10,.2f}")
+        print(f"   • RMSE: {test_metrics['RMSE']:>10,.2f}")
+        print(f"   • R²:   {test_metrics['R²']:>10.4f}")
+        print(f"   • MAPE: {test_metrics['MAPE']:>10.2f}%")
+        print("="*80)
+        
+        return model, train_metrics, test_metrics
+    
+    def save_model(self, model, model_name="xgboost_optimized_model"):
+        """Guardar modelo entrenado"""
+        model_path = self.model_dir / f"{model_name}.pkl"
+        
+        with open(model_path, 'wb') as f:
+            pickle.dump(model, f)
+        
+        print(f"💾 Modelo guardado en: {model_path}")
+        return model_path
+    
+    def load_model(self, model_name="xgboost_optimized_model"):
+        """Cargar modelo entrenado"""
+        model_path = self.model_dir / f"{model_name}.pkl"
+        
+        if model_path.exists():
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+            print(f"📥 Modelo cargado desde: {model_path}")
+            return model
         else:
-            print("⏭️  Saltando XGBoost (no disponible)")
-        
-        # Evaluación
-        self.evaluate_models(X_test, y_test)
-        
-        return self.models
-    
-    def evaluate_models(self, X_test, y_test):
-        """Evalúa los modelos entrenados"""
-        print("📈 Evaluando modelos...")
-        
-        for name, model in self.models.items():
-            y_pred = model.predict(X_test)
-            
-            mae = mean_absolute_error(y_test, y_pred)
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-            r2 = model.score(X_test, y_test)
-            
-            self.metrics[name] = {
-                'MAE': mae,
-                'RMSE': rmse,
-                'r2_score': r2
-            }
-            
-            print(f"   {name.upper():<20} - MAE: {mae:.2f}, RMSE: {rmse:.2f}, R²: {r2:.3f}")
-    
-    def save_models(self):
-        """Guarda los modelos entrenados"""
-        print("💾 Guardando modelos...")
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        for name, model in self.models.items():
-            # Guardar modelo
-            model_path = Config.get_output_path(f'model_{name}_{timestamp}.pkl')
-            joblib.dump(model, model_path)
-            print(f"   ✅ {name} guardado en: {model_path}")
-        
-        # Guardar el mejor modelo como "latest"
-        if self.metrics:
-            best_model_name = min(self.metrics.items(), key=lambda x: x[1]['MAE'])[0]
-            best_model = self.models[best_model_name]
-            latest_path = Config.get_output_path('model_latest.pkl')
-            joblib.dump(best_model, latest_path)
-            print(f"   🏆 Mejor modelo ({best_model_name}) guardado como: {latest_path}")
-    
-    def full_training_pipeline(self):
-        """Pipeline completo de entrenamiento"""
-        print("🚀 INICIANDO ENTRENAMIENTO DE MODELOS")
-        print("=" * 50)
-        
-        # Cargar datos
-        df = self.load_training_data()
-        if df is None:
-            print("❌ No se pudieron cargar datos para entrenamiento")
+            print(f"❌ No se encontró el modelo: {model_path}")
             return None
+    
+    def train_best_model(self, features_df):
+        """Entrenar el mejor modelo con configuración optimizada EXACTA"""
+        X_train, X_test, y_train, y_test = self.prepare_temporal_data(features_df)
         
-        # Preparar features
-        X, y = self.prepare_features(df)
+        if self.config['model_type'] == 'xgboost':
+            model, train_metrics, test_metrics = self.train_optimized_xgboost(X_train, X_test, y_train, y_test)
+        elif self.config['model_type'] == 'random_forest':
+            model, train_metrics, test_metrics = self.train_random_forest_model(X_train, X_test, y_train, y_test)
+        else:
+            raise ValueError(f"Tipo de modelo no soportado: {self.config['model_type']}")
         
-        # Entrenar modelos
-        models = self.train_models(X, y)
+        # Guardar modelo
+        model_path = self.save_model(model, f"{self.config['model_type']}_optimized_model")
         
-        # Guardar modelos
-        self.save_models()
-        
-        print("🎉 ENTRENAMIENTO COMPLETADO!")
-        return models
-
-# Prueba rápida
-if __name__ == "__main__":
-    trainer = ModelTrainer()
-    trainer.full_training_pipeline()
+        return model, train_metrics, test_metrics, model_path
+    
+    def feature_importance_analysis(self, model, feature_names, top_n=20):
+        """Análisis de importancia de features"""
+        if hasattr(model, 'feature_importances_'):
+            importance_df = pd.DataFrame({
+                'feature': feature_names,
+                'importance': model.feature_importances_
+            }).sort_values('importance', ascending=False)
+            
+            print(f"\n🏆 TOP {top_n} FEATURES POR IMPORTANCIA:")
+            print("="*60)
+            for i, row in importance_df.head(top_n).iterrows():
+                print(f"  {i+1:2d}. {row['feature']:35} → {row['importance']:.8f}")
+            
+            return importance_df
+        else:
+            print("❌ El modelo no tiene atributo feature_importances_")
+            return None

@@ -1,54 +1,74 @@
-# src/config.py
-import os
+
+"""
+Configuración global del proyecto - VERSIÓN MEJORADA
+"""
+import pandas as pd
 from pathlib import Path
 
-class Config:
-    """Configuración centralizada del proyecto"""
-    
-    # Paths de datos
-    BASE_DIR = Path(__file__).parent.parent
-    DATA_PATH = BASE_DIR / 'data' / 'raw'
-    OUTPUT_PATH = BASE_DIR / 'data' / 'processed'
-    
-    # Crear directorios si no existen
-    DATA_PATH.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
-    
-    # Archivos de datos
-    FILES = {
-        'orders': 'olist_orders_dataset.csv',
-        'items': 'olist_order_items_dataset.csv', 
-        'products': 'olist_products_dataset.csv',
-        'reviews': 'olist_order_reviews_dataset.csv',
-        'payments': 'olist_order_payments_dataset.csv',
-        'customers': 'olist_customers_dataset.csv',
-        'sellers': 'olist_sellers_dataset.csv'
-    }
-    
-    # Configuración de features
-    TEMPORAL_CONFIG = {
-        'lags': [1, 2, 3, 6, 12],
-        'moving_windows': [2, 3, 6, 12],
-        'ema_alphas': [0.3, 0.5, 0.7]
-    }
-    
-    # Columnas relevantes
-    ORDERS_COLUMNS = [
-        'order_id', 'customer_id', 'order_purchase_timestamp',
-        'order_delivered_carrier_date', 'order_delivered_customer_date',
-        'order_estimated_delivery_date', 'order_status'
-    ]
-    
-    # Configuración de modelos
-    RANDOM_STATE = 42
-    TEST_SIZE = 0.2
-    
-    @classmethod
-    def get_file_path(cls, dataset_name):
-        """Obtiene path completo del archivo"""
-        return cls.DATA_PATH / cls.FILES[dataset_name]
-    
-    @classmethod
-    def get_output_path(cls, filename):
-        """Obtiene path de salida"""
-        return cls.OUTPUT_PATH / filename
+# Rutas del proyecto
+PROJECT_ROOT = Path(__file__).parent.parent
+DATA_RAW = PROJECT_ROOT / "data" / "raw"
+DATA_PROCESSED = PROJECT_ROOT / "data" / "processed" 
+MODEL_DIR = PROJECT_ROOT / "data" / "model"
+
+# Crear directorios si no existen
+DATA_PROCESSED.mkdir(parents=True, exist_ok=True)
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+# Archivos de datos
+DATA_FILES = {
+    'orders': DATA_RAW / 'olist_orders_dataset.csv',
+    'items': DATA_RAW / 'olist_order_items_dataset.csv', 
+    'products': DATA_RAW / 'olist_products_dataset.csv',
+    'reviews': DATA_RAW / 'olist_order_reviews_dataset.csv',
+    'payments': DATA_RAW / 'olist_order_payments_dataset.csv'
+}
+
+# Configuración de fechas
+DATE_COLS = {
+    'orders': ['order_purchase_timestamp', 'order_delivered_carrier_date',
+               'order_delivered_customer_date', 'order_estimated_delivery_date']
+}
+
+# Configuración del modelo MEJORADA
+MODEL_CONFIG = {
+    'target_col': 'demand_next_month',
+    'test_size': 0.2,
+    'random_state': 42,
+    'model_type': 'xgboost',  # xgboost o random_forest
+    'feature_selection': True,
+    'feature_importance_threshold': 0.0001
+}
+
+# Configuración de períodos temporales
+TIME_PERIODS = {
+    'train_start': '2016-09',
+    'train_end': '2018-04', 
+    'test_start': '2018-05',
+    'test_end': '2018-07'
+}
+
+# Configuración de retraining mejorada
+RETRAINING_CONFIG = {
+    'retrain_interval_days': 30,           # Reentrenamiento incremental cada 30 días
+    'full_retrain_interval_days': 90,      # Reentrenamiento completo cada 90 días
+    'performance_threshold': 0.01,         # Mejora mínima del 1% en R² para mantener nuevo modelo
+    'enable_auto_retrain': True,           # Habilitar reentrenamiento automático
+    'backup_old_models': True,             # Hacer backup de modelos antiguos
+    'max_history_size': 100,               # Máximo historial de reentrenamientos
+    'run_on_startup': False,                # Ejecutar al iniciar el scheduler
+    'verbose_logging': False               # Logging detallado
+}
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,147 +1,90 @@
-# src/data_loader.py
+"""
+Módulo para carga y limpieza de datos - VERSIÓN CORREGIDA
+"""
 import pandas as pd
 import numpy as np
-from .config import Config
+from pathlib import Path
+from config import DATA_FILES, DATE_COLS, DATA_PROCESSED, MODEL_DIR
 
 class DataLoader:
-    """Clase para carga y limpieza de datos"""
-    
     def __init__(self):
-        self.data = {}
+        self.data_files = DATA_FILES
+        self.date_cols = DATE_COLS
+        self.processed_path = DATA_PROCESSED
         
-    def load_all_data(self):
-        """Carga todos los datasets"""
-        print("📥 Cargando datasets...")
+    def load_raw_data(self):
+        """Cargar todos los datasets raw"""
+        print("📥 Cargando datasets raw...")
         
-        for dataset in Config.FILES:
-            file_path = Config.get_file_path(dataset)
-            if file_path.exists():
-                try:
-                    # Cargar orders con parse_dates especial
-                    if dataset == 'orders':
-                        self.data[dataset] = pd.read_csv(
-                            file_path,
-                            parse_dates=[
-                                'order_purchase_timestamp',
-                                'order_delivered_carrier_date', 
-                                'order_delivered_customer_date',
-                                'order_estimated_delivery_date'
-                            ]
-                        )
-                    else:
-                        self.data[dataset] = pd.read_csv(file_path)
-                    
-                    print(f"   ✅ {dataset}: {self.data[dataset].shape}")
-                    
-                except Exception as e:
-                    print(f"   ⚠️  Error cargando {dataset}: {e}")
-                    self.data[dataset] = pd.DataFrame()
-            else:
-                print(f"   ❌ Archivo no encontrado: {file_path}")
-                self.data[dataset] = pd.DataFrame()
-        
-        return self.data
-    
-    def clean_orders(self):
-        """Limpieza específica de orders"""
-        print("🧹 Limpiando orders...")
-        orders = self.data['orders'].copy()
-        
-        # Seleccionar columnas relevantes
-        available_cols = [col for col in Config.ORDERS_COLUMNS if col in orders.columns]
-        orders = orders[available_cols]
-        
-        # Filtrar solo pedidos entregados
-        orders = orders[orders['order_status'] == 'delivered'].copy()
-        
-        # Eliminar duplicados
-        orders = orders.drop_duplicates(subset=['order_id'])
-        
-        # Eliminar nulos en fecha de compra
-        orders = orders.dropna(subset=['order_purchase_timestamp'])
-        
-        self.data['orders_clean'] = orders
-        print(f"   ✅ Orders limpias: {orders.shape}")
-        return orders
-    
-    def clean_items(self):
-        """Limpieza específica de items"""
-        print("🧹 Limpiando items...")
-        items = self.data['items'].copy()
-        
-        items = items.drop_duplicates()
-        items = items[items['price'] > 0]
-        items = items[items['freight_value'] >= 0]
-        
-        self.data['items_clean'] = items
-        print(f"   ✅ Items limpios: {items.shape}")
-        return items
-    
-    def clean_products(self):
-        """Limpieza específica de products"""
-        print("🧹 Limpiando products...")
-        products = self.data['products'].copy()
-        
-        # Normalizar categorías
-        products['product_category_name'] = (
-            products['product_category_name']
-            .astype(str)
-            .str.lower()
-            .str.replace(" ", "_")
+        # Cargar orders con parseo de fechas
+        orders = pd.read_csv(
+            self.data_files['orders'],
+            parse_dates=self.date_cols['orders']
         )
         
-        # Convertir dimensiones a numéricas
-        numeric_cols = ['product_weight_g', 'product_length_cm', 'product_height_cm', 'product_width_cm']
-        for col in numeric_cols:
-            products[col] = pd.to_numeric(products[col], errors='coerce')
+        # Cargar resto de datasets
+        items = pd.read_csv(self.data_files['items'])
+        products = pd.read_csv(self.data_files['products'])
+        reviews = pd.read_csv(self.data_files['reviews'])
+        payments = pd.read_csv(self.data_files['payments'])
         
-        products = products.drop_duplicates(subset=['product_id'])
+        print("✅ Datasets cargados exitosamente")
+        print(f"Orders: {orders.shape}")
+        print(f"Items: {items.shape}")
+        print(f"Products: {products.shape}")
+        print(f"Reviews: {reviews.shape}")
+        print(f"Payments: {payments.shape}")
         
-        self.data['products_clean'] = products
-        print(f"   ✅ Products limpios: {products.shape}")
-        return products
+        return orders, items, products, reviews, payments
     
-    def clean_payments(self):
-        """Limpieza específica de payments"""
-        print("🧹 Limpiando payments...")
-        payments = self.data['payments'].copy()
+    def clean_data(self, orders, items, products, reviews, payments):
+        """Realizar limpieza básica de datos"""
+        print("🧹 Realizando limpieza de datos...")
         
-        payments = payments.drop_duplicates()
-        payments['payment_value'] = pd.to_numeric(payments['payment_value'], errors='coerce')
-        payments = payments[payments['payment_value'] >= 0]
+        # Asegurar que las columnas de fecha sean datetime
+        for date_col in self.date_cols['orders']:
+            if date_col in orders.columns:
+                orders[date_col] = pd.to_datetime(orders[date_col], errors='coerce')
+                print(f"✅ Convertida {date_col} a datetime")
         
-        self.data['payments_clean'] = payments
-        print(f"   ✅ Payments limpios: {payments.shape}")
-        return payments
+        # Filtrar solo órdenes entregadas
+        df_delivered = orders[orders['order_status'] == 'delivered'].copy()
+        print(f"Órdenes totales: {len(orders)}")
+        print(f"Órdenes entregadas: {len(df_delivered)}")
+        
+        # Unir todos los datasets
+        df = orders.merge(items, on='order_id', how='left')
+        df = df.merge(products, on='product_id', how='left')
+        df = df.merge(reviews, on='order_id', how='left')
+        df = df.merge(payments, on='order_id', how='left')
+        
+        print(f"Dataset unificado: {df.shape}")
+        
+        return df
     
-    def clean_reviews(self):
-        """Limpieza específica de reviews"""
-        print("🧹 Limpiando reviews...")
-        reviews = self.data['reviews'].copy()
-        
-        reviews = reviews.drop_duplicates(subset=['order_id'])
-        reviews['review_score'] = pd.to_numeric(reviews['review_score'], errors='coerce')
-        
-        # Limpiar fechas
-        date_cols = ['review_creation_date', 'review_answer_timestamp']
-        for col in date_cols:
-            reviews[col] = pd.to_datetime(reviews[col], errors='coerce')
-        
-        self.data['reviews_clean'] = reviews
-        print(f"   ✅ Reviews limpias: {reviews.shape}")
-        return reviews
+    def load_processed_data(self):
+        """Cargar datos ya procesados si existen"""
+        processed_file = self.processed_path / "processed_data.csv"
+        if processed_file.exists():
+            print("📥 Cargando datos procesados...")
+            df = pd.read_csv(processed_file)
+            
+            # Convertir columnas de fecha al cargar
+            date_columns = ['order_purchase_timestamp', 'order_delivered_carrier_date',
+                          'order_delivered_customer_date', 'order_estimated_delivery_date']
+            
+            for col in date_columns:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                    print(f"✅ Convertida {col} a datetime")
+            
+            return df
+        else:
+            print("❌ No se encontraron datos procesados")
+            return None
     
-    def clean_all_data(self):
-        """Ejecuta toda la limpieza"""
-        print("\n" + "="*50)
-        print("INICIANDO LIMPIEZA COMPLETA DE DATOS")
-        print("="*50)
-        
-        self.clean_orders()
-        self.clean_items() 
-        self.clean_products()
-        self.clean_payments()
-        self.clean_reviews()
-        
-        print("✅ Limpieza completada!")
-        return self.data
+    def save_processed_data(self, df):
+        """Guardar datos procesados"""
+        processed_file = self.processed_path / "processed_data.csv"
+        df.to_csv(processed_file, index=False)
+        print(f"💾 Datos procesados guardados en: {processed_file}")
