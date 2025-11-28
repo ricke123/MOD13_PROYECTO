@@ -56,7 +56,7 @@ TIME_PERIODS = {
 
 # Configuración de retraining
 RETRAINING_CONFIG = {             
-    'retrain_interval_days':    0.0000009,   # Reentrenamiento incremental cada 30 días
+    'retrain_interval_days':   30,# 0.0000009,   # Reentrenamiento incremental cada 30 días
     'full_retrain_interval_days': 90,   # Reentrenamiento completo cada 90 días
     'performance_threshold':      0.01, # Mejora mínima del 1% en R² para aceptar nuevo modelo
     'enable_auto_retrain':        True,
