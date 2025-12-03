@@ -1,0 +1,16 @@
+artifact_uri: mlflow-artifacts:/494015538080576812/cb79c9c7add24025977abb0327484174/artifacts
+deleted_time: 1764781327421
+end_time: 1764725509337
+entry_point_name: ''
+experiment_id: '494015538080576812'
+lifecycle_stage: deleted
+run_id: cb79c9c7add24025977abb0327484174
+run_name: DEMO_DAY_OFFICIAL
+run_uuid: cb79c9c7add24025977abb0327484174
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1764725509109
+status: 3
+tags: []
+user_id: REECK

@@ -1,0 +1,103 @@
+
+version: '3.8'
+
+services:
+  # MLflow - Tracking de Experimentos
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlruns
+      - ./data:/data
+    environment:
+      - MLFLOW_TRACKING_URI=file:///mlruns
+    networks:
+      - olist-network
+    restart: unless-stopped
+
+  # API FastAPI
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./api.py:/app/api.py
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTHONPATH=/app
+    depends_on:
+      - mlflow
+    networks:
+      - olist-network
+    restart: unless-stopped
+    command: >
+      sh -c "python /app/docker/wait-for-it.sh mlflow:5000 --timeout=30 -- 
+             uvicorn api:app --host 0.0.0.0 --port 8000 --reload"
+
+  # Dashboard Streamlit
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - ./data:/app/data
+    environment:
+      - API_URL=http://api:8000
+      - MLFLOW_URL=http://mlflow:5000
+    depends_on:
+      - api
+    networks:
+      - olist-network
+    restart: unless-stopped
+    command: >
+      sh -c "python /app/docker/wait-for-it.sh api:8000 --timeout=30 -- 
+             streamlit run dashboard.py --server.port=8501 --server.address=0.0.0.0"
+
+  # PostgreSQL (Opcional - para métricas)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=olist_forecast
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - olist-network
+    restart: unless-stopped
+
+  # PGAdmin (Opcional - interfaz DB)
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@olist.com
+      - PGADMIN_DEFAULT_PASSWORD=admin123
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - olist-network
+    restart: unless-stopped
+
+networks:
+  olist-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mlruns:
+

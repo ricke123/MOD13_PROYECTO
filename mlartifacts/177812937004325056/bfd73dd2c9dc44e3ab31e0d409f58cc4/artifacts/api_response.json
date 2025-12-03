@@ -1,0 +1,8 @@
+{
+  "predicted_demand": 95.74,
+  "product_category": "electronics",
+  "confidence": "alta",
+  "timestamp": "2025-12-03T13:03:33.752160",
+  "status": "success",
+  "model_used": "RandomForest"
+}

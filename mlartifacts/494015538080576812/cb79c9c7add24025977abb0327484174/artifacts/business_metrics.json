@@ -1,0 +1,13 @@
+{
+  "accuracy_percentage": 75.91960533918258,
+  "bias_units": -30.64249897003174,
+  "overstock_units": 0.0,
+  "stockout_units": 245.1399917602539,
+  "inventory_costs_usd": 0.0,
+  "stockout_costs_usd": 3677.0998764038086,
+  "total_costs_usd": 3677.0998764038086,
+  "estimated_revenue_usd": 18571.500205993652,
+  "roi_percentage": 3.6784213567303112,
+  "monthly_savings_estimate": 13789.124536514282,
+  "improvement_vs_baseline": 0.9196053391825778
+}

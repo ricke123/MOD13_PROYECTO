@@ -1,0 +1,83 @@
+{
+  "fecha_analisis": "2025-11-28 20:05:42",
+  "datos_generales": {
+    "total_registros": 1179,
+    "total_categorias": 73,
+    "rango_temporal": "2016-09 - 2018-07",
+    "pedidos_analizados": 96478
+  },
+  "estadisticas_target": {
+    "Count": 1179.0,
+    "Mean": 91.81424936386769,
+    "Std": 154.89227956476617,
+    "Min": 1.0,
+    "Q25": 6.0,
+    "Median": 21.0,
+    "Q75": 104.5,
+    "Max": 971.0,
+    "Skewness": 2.5465120275634985,
+    "Kurtosis": 6.9181325404713085
+  },
+  "metricas_desbalanceamiento": {
+    "Coef. Variación": 1.6870178718219966,
+    "Ratio Max/Min Categorías": 547.25,
+    "Índice Gini": 0.7173269218909115,
+    "Skewness": 2.5465120275634985,
+    "Kurtosis": 6.9181325404713085,
+    "% Categorías Baja Rep.": 4.10958904109589
+  },
+  "outliers": {
+    "cantidad": 146,
+    "porcentaje": 12.383375742154367,
+    "limite_inferior": -141.75,
+    "limite_superior": 252.25
+  },
+  "categorias": {
+    "total": 73,
+    "con_pocos_datos": 12,
+    "top_5_mas_demandadas": {
+      "cama_mesa_banho": 547.25,
+      "beleza_saude": 450.57,
+      "esporte_lazer": 420.7,
+      "moveis_decoracao": 404.75,
+      "informatica_acessorios": 381.6
+    },
+    "top_5_menos_demandadas": {
+      "cds_dvds_musicais": 1.8,
+      "la_cuisine": 1.62,
+      "fashion_roupa_infanto_juvenil": 1.2,
+      "pc_gamer": 1.2,
+      "seguros_e_servicos": 1.0
+    }
+  },
+  "recomendaciones": [
+    {
+      "num": 1,
+      "problema": "Distribución asimétrica",
+      "gravedad": "ALTA",
+      "solución": "Aplicar transformación logarítmica al target",
+      "beneficio": "Estabiliza varianza y reduce influencia de outliers"
+    },
+    {
+      "num": 2,
+      "problema": "Desbalance entre categorías (ratio: 547.2)",
+      "gravedad": "ALTA",
+      "solución": "Usar sample_weight en el modelo",
+      "beneficio": "Mejora predicción en categorías minoritarias"
+    },
+    {
+      "num": 3,
+      "problema": "146 outliers (12.4%)",
+      "gravedad": "MEDIA",
+      "solución": "Aplicar RobustScaler o Windsorization",
+      "beneficio": "Reduce sensibilidad a valores extremos"
+    },
+    {
+      "num": 4,
+      "problema": "Alta variabilidad (CV: 1.69)",
+      "gravedad": "MEDIA",
+      "solución": "Normalizar features temporales y de demanda",
+      "beneficio": "Mejora convergencia del modelo"
+    }
+  ]
+}

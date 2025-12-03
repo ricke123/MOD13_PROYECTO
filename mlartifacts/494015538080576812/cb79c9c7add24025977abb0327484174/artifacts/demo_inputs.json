@@ -1,0 +1,32 @@
+{
+  "actual": [
+    100,
+    120,
+    110,
+    130,
+    125,
+    140,
+    135,
+    128
+  ],
+  "predicted": [
+    90.91999816894531,
+    90.58000183105469,
+    93.4000015258789,
+    101.29000091552734,
+    88.12000274658203,
+    93.13999938964844,
+    92.5,
+    92.91000366210938
+  ],
+  "categories": [
+    "electronics",
+    "electronics",
+    "electronics",
+    "electronics",
+    "home_appliances",
+    "home_appliances",
+    "home_appliances",
+    "home_appliances"
+  ]
+}

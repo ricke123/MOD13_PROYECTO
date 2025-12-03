@@ -1,0 +1,16 @@
+artifact_uri: file:///C:/Users/REECK/MOD13_PROYECTO/mlruns/181424508569550761/4c89b6cb7708496f8f27322cffa2fad1/artifacts
+deleted_time: 1764769255144
+end_time: 1764728096792
+entry_point_name: ''
+experiment_id: '181424508569550761'
+lifecycle_stage: deleted
+run_id: 4c89b6cb7708496f8f27322cffa2fad1
+run_name: api_production
+run_uuid: 4c89b6cb7708496f8f27322cffa2fad1
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1764728096670
+status: 4
+tags: []
+user_id: REECK
